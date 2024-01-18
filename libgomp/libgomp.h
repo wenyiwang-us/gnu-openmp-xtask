@@ -72,7 +72,7 @@
 #ifdef HAVE_ATTRIBUTE_VISIBILITY
 # pragma GCC visibility push(hidden)
 #endif
-
+#define GOMP_USE_XQUEUE 1
 /* If we were a C++ library, we'd get this from <std/atomic>.  */
 enum memmodel
 {
@@ -506,6 +506,9 @@ extern uintptr_t gomp_def_allocator;
 extern int goacc_device_num;
 extern char *goacc_device_type;
 extern int goacc_default_dims[GOMP_DIM_MAX];
+#ifdef GOMP_USE_XQUEUE
+extern unsigned int gomp_num_task_queues; // number of task queues
+#endif
 
 enum gomp_task_kind
 {
@@ -559,6 +562,21 @@ struct gomp_taskwait
   gomp_sem_t taskwait_sem;
 };
 
+#ifdef GOMP_USE_XQUEUE
+typedef struct gomp_task gomp_task_t;
+#define TASK_SUCCESSFULLY_PUSHED 0
+#define TASK_NOT_PUSHED 1
+
+#define GOMP_ATOMIC_ST_REL(PTR, VAL) __atomic_store_n (PTR, VAL, __ATOMIC_RELEASE)
+#define GOMP_ATOMIC_LD_ACQ(PTR) __atomic_load_n (PTR, __ATOMIC_ACQUIRE)
+#define GOMP_ATOMIC_ST_RLX(PTR, VAL) __atomic_store_n (PTR, VAL, __ATOMIC_RELAXED)
+// c is different from c++ here, c++ first return then do the operation
+// c first do the operations then return
+#define GOMP_ATOMIC_INC(PTR) __atomic_add_fetch (PTR, 1, __ATOMIC_ACQ_REL)
+#define GOMP_ATOMIC_DEC(PTR) __atomic_sub_fetch (PTR, 1, __ATOMIC_ACQ_REL)
+#define GOMP_ATOMIC_ADD(PTR, VAL) __atomic_add_fetch (PTR, VAL, __ATOMIC_ACQ_REL)
+#define GOMP_ATOMIC_SUB(PTR, VAL) __atomic_sub_fetch (PTR, VAL, __ATOMIC_ACQ_REL)
+#endif
 /* This structure describes a "task" to be run by a thread.  */
 
 struct gomp_task
@@ -609,9 +627,14 @@ struct gomp_task
      block further execution of their parent until the dependencies
      are satisfied.  */
   bool parent_depends_on;
+#ifdef GOMP_USE_XQUEUE
+  unsigned long td_incomplete_child_tasks;
+#endif
   /* Dependencies provided and/or needed for this task.  DEPEND_COUNT
      is the number of items available.  */
   struct gomp_task_depend_entry depend[];
+
+
 };
 
 /* This structure describes a single #pragma omp taskgroup.  */
@@ -715,7 +738,12 @@ struct gomp_team
 
   /* This barrier is used for most synchronization of the team.  */
   gomp_barrier_t barrier;
-
+#ifdef GOMP_USE_XQUEUE
+  xtask_barrier_t xtask_barrier;
+  long *tl_task_count;
+  long generation;
+  long xtask_count;
+#endif
   /* Initial work shares, to avoid allocating any gomp_work_share
      structs in the common case.  */
   struct gomp_work_share work_shares[8];
@@ -737,13 +765,30 @@ struct gomp_team
   unsigned int task_running_count;
   int work_share_cancelled;
   int team_cancelled;
-
+#ifdef GOMP_USE_XQUEUE
+  unsigned int final_spin;
+#endif
   /* Number of tasks waiting for their completion event to be fulfilled.  */
   unsigned int task_detach_count;
 
   /* This array contains structures for implicit tasks.  */
   struct gomp_task implicit_task[];
 };
+
+#ifdef GOMP_USE_XQUEUE
+#define TASK_DEQUE_SIZE(td) ((td)->td_deque_size)
+#define TASK_DEQUE_MASK(td) ((td)->td_deque_size - 1)
+#define INITIAL_TASK_BITS 8
+#define INITIAL_TASK_DEQUE_SIZE (1 << INITIAL_TASK_BITS)
+
+/* This structure contains task queue for xqueue implementation. */
+struct gomp_taskq{
+  volatile struct gomp_task **td_deque; // task queue
+  unsigned int td_deque_head; // head of the queue
+  unsigned int td_deque_tail; // tail of the queue
+};
+
+#endif
 
 /* This structure contains all data that is private to libgomp and is
    allocated per thread.  */
@@ -761,6 +806,19 @@ struct gomp_thread
   /* This is the task that the thread is currently executing.  */
   struct gomp_task *task;
 
+#ifdef GOMP_USE_XQUEUE
+  /* This is the xqueue implementation of task queue.  */
+  struct gomp_taskq ** td_task_q;
+  unsigned int num_queues;
+  unsigned long last_q;
+  unsigned long last_q_accessed;
+
+  int td_deque_size;
+  int td_deque_ntasks;
+  int td_deque_last_stolen;
+  unsigned long tl_task_count; // thread local task count
+  unsigned long tl_task_queued_count;;
+#endif
   /* This semaphore is used for ordered loops.  */
   gomp_sem_t release;
 
@@ -996,7 +1054,12 @@ gomp_finish_task (struct gomp_task *task)
   if (__builtin_expect (task->depend_hash != NULL, 0))
     free (task->depend_hash);
 }
-
+#ifdef GOMP_USE_XQUEUE
+extern void gomp_alloc_task_q(struct gomp_thread *thr);
+extern void xtask_team_barrier_wait();
+extern void xtask_handle_tasks ();
+extern long get_task_count();
+#endif
 /* team.c */
 
 extern struct gomp_team *gomp_new_team (unsigned);

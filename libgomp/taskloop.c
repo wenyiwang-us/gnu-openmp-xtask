@@ -29,7 +29,7 @@
 /* Called when encountering an explicit task directive.  If IF_CLAUSE is
    false, then we must not delay in executing the task.  If UNTIED is true,
    then the task may be executed by any member of the team.  */
-
+// # include <stdio.h>
 void
 GOMP_taskloop (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 	       long arg_size, long arg_align, unsigned flags,
@@ -38,6 +38,8 @@ GOMP_taskloop (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 {
   struct gomp_thread *thr = gomp_thread ();
   struct gomp_team *team = thr->ts.team;
+//   gomp_debug(0. "wenyi(GOMP_taskloop): entry.\n");
+//   printf("wenyi: here");
 
 #ifdef HAVE_BROKEN_POSIX_SEMAPHORES
   /* If pthread_mutex_* is used for omp_*lock*, then each task must be

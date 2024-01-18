@@ -75,6 +75,7 @@ gomp_thread_start (void *xdata)
   void (*local_fn) (void *);
   void *local_data;
 
+
 #if defined HAVE_TLS || defined USE_EMUTLS
   thr = &gomp_tls_data;
 #else
@@ -103,6 +104,10 @@ gomp_thread_start (void *xdata)
 
   /* Make thread pool local. */
   pool = thr->thread_pool;
+  // WENYI TODO: initialize task_queue to NULL. gomp_task_init will allocate memory for task_queue if NULL. 
+#ifdef GOMP_USE_XQUEUE
+	GOMP_ATOMIC_ST_RLX(&thr->tl_task_count, 0); // init task count to 0
+#endif
 
   if (data->nested)
     {
@@ -112,26 +117,36 @@ gomp_thread_start (void *xdata)
       gomp_barrier_wait (&team->barrier);
 
       local_fn (local_data);
+	gomp_debug(0, "[tid=%d]wenyi(gomp_thread_start):nested, before wait_final task_count=%d.\n", omp_get_thread_num(), team->task_count);
       gomp_team_barrier_wait_final (&team->barrier);
-      gomp_finish_task (task);
+      gomp_finish_task (task); 
       gomp_barrier_wait_last (&team->barrier);
     }
   else
     {
       pool->threads[thr->ts.team_id] = thr;
-
+	  // wenyi: we can put taskq allocation here.
+	  // extern the alloc queue function.
+#ifdef GOMP_USE_XQUEUE
+	if(thr->td_task_q == NULL)
+	  	gomp_alloc_task_q(thr);
+#endif
       gomp_simple_barrier_wait (&pool->threads_dock);
       do
 	{
-	  struct gomp_team *team = thr->ts.team;
+	//   struct gomp_team *team = thr->ts.team;
 	  struct gomp_task *task = thr->task;
-
 	  local_fn (local_data);
-	  gomp_team_barrier_wait_final (&team->barrier);
+
+	// gomp_debug(0, "[tid=%d]wenyi(gomp_thread_start): nthreads=%d.\n", omp_get_thread_num(), team->nthreads);
+
+	xtask_team_barrier_wait();
 	  gomp_finish_task (task);
-
+	//   gomp_debug(0, "[tid=%d]wenyi(gomp_thread_start): Before team_simple_barrier_wait,task_count=%ld, gen=%ld\n", omp_get_thread_num(), get_task_count() ,team->generation);
+	//   gomp_debug(0, "[tid=%d]wenyi(gomp_thread_start): Ready to exit.", omp_get_thread_num());
+			
 	  gomp_simple_barrier_wait (&pool->threads_dock);
-
+		// gomp_debug(0, "[tid=%d]wenyi(gomp_thread_start): After team_simple_barrier_wait\n", omp_get_thread_num());
 	  local_fn = thr->fn;
 	  local_data = thr->data;
 	  thr->fn = NULL;
@@ -209,11 +224,27 @@ gomp_new_team (unsigned nthreads)
   gomp_sem_init (&team->master_release, 0);
   team->ordered_release = (void *) &team->implicit_task[nthreads];
   team->ordered_release[0] = &team->master_release;
-
+#ifndef GOMP_USE_XQUEUE
   priority_queue_init (&team->task_queue);
   team->task_count = 0;
   team->task_queued_count = 0;
   team->task_running_count = 0;
+#else
+  team->task_count = 0;
+  team->task_queued_count = 0;
+  team->task_running_count = 0;
+	// GOMP_ATOMIC_ST_RLX(&team->task_count, 0);
+	// GOMP_ATOMIC_ST_RLX(&team->task_running_count, 0);
+	// GOMP_ATOMIC_ST_RLX(&team->task_queued_count, 0);
+	// GOMP_ATOMIC_ST_RLX(&team->final_spin, 0);
+	// xtask_barrier_init(&team->xtask_barrier, nthreads);
+	GOMP_ATOMIC_ST_REL(&team->xtask_count, 0);
+	GOMP_ATOMIC_ST_RLX(&team->generation, team->nthreads);
+	team->tl_task_count = gomp_malloc(sizeof(long) * nthreads);
+	for(int i = 0; i < nthreads; i++)
+		GOMP_ATOMIC_ST_RLX(&team->tl_task_count[i], 0);
+	
+#endif
   team->work_share_cancelled = 0;
   team->team_cancelled = 0;
 
@@ -321,6 +352,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 		 unsigned flags, struct gomp_team *team,
 		 struct gomp_taskgroup *taskgroup)
 {
+  gomp_debug(0, "wenyi: gomp_team_startv1.2.\n");
   struct gomp_thread_start_data *start_data = NULL;
   struct gomp_thread *thr, *nthr;
   struct gomp_task *task;
@@ -341,6 +373,10 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
   pool = thr->thread_pool;
   task = thr->task;
   icv = task ? &task->icv : &gomp_global_icv;
+  // wenyi:
+#ifdef GOMP_USE_XQUEUE
+  gomp_num_task_queues = nthreads;
+#endif
   if (__builtin_expect (gomp_places_list != NULL, 0) && thr->place == 0)
     {
       gomp_init_affinity ();
@@ -868,9 +904,12 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
  do_release:
   if (nested)
     gomp_barrier_wait (&team->barrier);
-  else
-    gomp_simple_barrier_wait (&pool->threads_dock);
+  else{
+	 gomp_simple_barrier_wait (&pool->threads_dock);
+  }
+   
 
+	
   /* Decrease the barrier threshold to match the number of threads
      that should arrive back at the end of this team.  The extra
      threads should be exiting.  Note that we arrange for this test
@@ -946,6 +985,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 void
 gomp_team_end (void)
 {
+	
   struct gomp_thread *thr = gomp_thread ();
   struct gomp_team *team = thr->ts.team;
 
@@ -953,7 +993,9 @@ gomp_team_end (void)
      As #pragma omp cancel parallel might get awaited count in
      team->barrier in a inconsistent state, we need to use a different
      counter here.  */
-  gomp_team_barrier_wait_final (&team->barrier);
+	 xtask_team_barrier_wait();
+	
+//   gomp_team_barrier_wait_final (&team->barrier);
   if (__builtin_expect (team->team_cancelled, 0))
     {
       struct gomp_work_share *ws = team->work_shares_to_free;

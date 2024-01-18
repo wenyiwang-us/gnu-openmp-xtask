@@ -42,6 +42,16 @@ typedef struct
   unsigned awaited_final;
 } gomp_barrier_t;
 
+#ifdef GOMP_USE_XQUEUE
+typedef struct
+{
+  int dirty_bit;
+  unsigned total __attribute__((aligned (64)));
+  unsigned generations;
+} xtask_barrier_t;
+
+#endif /* GOMP_USE_XQUEUE */
+
 typedef unsigned int gomp_barrier_state_t;
 
 /* The generation field contains a counter in the high bits, with a few
@@ -84,6 +94,17 @@ extern bool gomp_team_barrier_wait_cancel_end (gomp_barrier_t *,
 extern void gomp_team_barrier_wake (gomp_barrier_t *, int);
 struct gomp_team;
 extern void gomp_team_barrier_cancel (struct gomp_team *);
+
+#ifdef GOMP_USE_XQUEUE
+// extern void xtask_team_barrier_wait(struct gomp_team *);
+// extern void xtask_barrier_init(xtask_barrier_t *, int);
+// static inline void xtask_barrier_init(xtask_barrier_t *bar, int total, gomp_thread *thr)
+// {
+//   bar->dirty_bit = 0;
+//   bar->total = total;
+//   bar->thread_pool = thr->thread_pool;
+// }
+#endif
 
 static inline gomp_barrier_state_t
 gomp_barrier_wait_start (gomp_barrier_t *bar)

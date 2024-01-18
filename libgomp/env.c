@@ -98,6 +98,9 @@ size_t gomp_affinity_format_len;
 char *goacc_device_type;
 int goacc_device_num;
 int goacc_default_dims[GOMP_DIM_MAX];
+#ifdef GOMP_USE_XQUEUE
+unsigned int gomp_num_task_queues;
+#endif
 
 #ifndef LIBGOMP_OFFLOADED_ONLY
 

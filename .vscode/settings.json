@@ -1,0 +1,7 @@
+{
+    "cmake.sourceDirectory": "/home/wwang/xtask/xgcc/gcc/libcody",
+    "cmake.configureOnOpen": false,
+    "files.associations": {
+        "barrier": "c"
+    }
+}

@@ -30,6 +30,7 @@
 #define GOMP_SIMPLE_BARRIER_H 1
 
 #include "bar.h"
+// #include <stdio.h>
 
 typedef struct
 {

@@ -30,6 +30,7 @@
 #include "libgomp.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 struct gomp_thread *nvptx_thrs __attribute__((shared,nocommon));
 int __gomp_team_num __attribute__((shared,nocommon));

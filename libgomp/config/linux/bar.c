@@ -81,16 +81,17 @@ void
 gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
 {
   unsigned int generation, gen;
-
+  // gomp_debug(0, "[tid=%d]wenyi (gomp_team_barrier_wait_end): entry.\n", omp_get_thread_num());
   if (__builtin_expect (state & BAR_WAS_LAST, 0))
     {
+      gomp_debug(0, "[tid=%d]wenyi (gomp_team_barrier_wait_end): BAR_WAS_LAST.\n", omp_get_thread_num());
       /* Next time we'll be awaiting TOTAL threads again.  */
       struct gomp_thread *thr = gomp_thread ();
       struct gomp_team *team = thr->ts.team;
 
       bar->awaited = bar->total;
       team->work_share_cancelled = 0;
-      if (__builtin_expect (team->task_count, 0))
+      if (__builtin_expect(team->task_count || !GOMP_ATOMIC_LD_ACQ(&team->final_spin), 0))
 	{
 	  gomp_barrier_handle_tasks (state);
 	  state &= ~BAR_WAS_LAST;
@@ -99,8 +100,10 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
 	{
 	  state &= ~BAR_CANCELLED;
 	  state += BAR_INCR - BAR_WAS_LAST;
+    // state |= BAR_WAITING_FOR_TASK;
 	  __atomic_store_n (&bar->generation, state, MEMMODEL_RELEASE);
 	  futex_wake ((int *) &bar->generation, INT_MAX);
+    gomp_debug(0, "[tid=%d]wenyi (gomp_team_barrier_wait_end): BAR_WAS_LAST, after futex_wake.\n", omp_get_thread_num());
 	  return;
 	}
     }
@@ -109,7 +112,9 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
   state &= ~BAR_CANCELLED;
   do
     {
+      // gomp_debug(0, "[tid=%d]wenyi (gomp_team_barrier_wait_end): before do_wait.\n", omp_get_thread_num());
       do_wait ((int *) &bar->generation, generation);
+      // gomp_debug(0, "wenyi (gomp_team_barrier_wait_end): after do_wait.\n");
       gen = __atomic_load_n (&bar->generation, MEMMODEL_ACQUIRE);
       if (__builtin_expect (gen & BAR_TASK_PENDING, 0))
 	{
@@ -130,6 +135,7 @@ gomp_team_barrier_wait (gomp_barrier_t *bar)
 void
 gomp_team_barrier_wait_final (gomp_barrier_t *bar)
 {
+  // gomp_debug(0, "wenyi(gomp_team_barrier_wait_final): entry.\n");
   gomp_barrier_state_t state = gomp_barrier_wait_final_start (bar);
   if (__builtin_expect (state & BAR_WAS_LAST, 0))
     bar->awaited_final = bar->total;
@@ -209,3 +215,26 @@ gomp_team_barrier_cancel (struct gomp_team *team)
   gomp_mutex_unlock (&team->task_lock);
   futex_wake ((int *) &team->barrier.generation, INT_MAX);
 }
+
+#ifdef GOMP_USE_XQUEUE
+// void xtask_team_barrier_wait(struct gomp_team *team){
+//   unsigned long count = 0;
+//   bool has_task;
+//   while(true){
+//     has_task = false;
+//     for(int i = 0; i < bar->total; i++){
+//       count += GOMP_ATOMIC_LD_ACQ(&team->thread_pool->threads[i]->tl_task_count);
+//       if(count){
+//         has_task = true;
+//         //TODO: keep running tasks
+//         xtask_handle_tasks();
+//         count = 0;
+//       }
+//     }
+//   if(!has_task)
+//     break;
+//   }
+//   return;
+// }
+
+#endif

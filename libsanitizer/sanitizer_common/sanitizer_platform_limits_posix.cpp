@@ -121,6 +121,7 @@ typedef struct user_fpregs elf_fpregset_t;
 #include <netipx/ipx.h>
 #include <netrom/netrom.h>
 #include <obstack.h>
+#define HAVE_RPC_XDR_H 0
 #if HAVE_RPC_XDR_H
 # include <rpc/xdr.h>
 #endif
