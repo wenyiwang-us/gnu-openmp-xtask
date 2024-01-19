@@ -143,7 +143,7 @@ gomp_push_task(struct gomp_task *task){
 	// gomp_debug(0, "[tid=%d] wenyi(gomp_push_task): head=%d", omp_get_thread_num(), target_thr->td_task_q[last_q]->td_deque_head);
 	// adding new line here to see if gdb responds
 	// adding new line here to see if gdb responds
-	
+	// gomp_debug(0, "[tid=%d] wenyi(gomp_push_task): target_thr=%p, target_thr->td_task_q[last_q]=%p, target_thr->td_task_q[last_q]->td_deque_head=%d, target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head]=%p", omp_get_thread_num(), target_thr, target_thr->td_task_q[last_q], target_thr->td_task_q[last_q]->td_deque_head, target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head]);
 	while (target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
 		num_tries++;
 		if (num_tries < 25)

@@ -376,6 +376,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
   // wenyi:
 #ifdef GOMP_USE_XQUEUE
   gomp_num_task_queues = nthreads;
+  gomp_alloc_task_q(thr);
 #endif
   if (__builtin_expect (gomp_places_list != NULL, 0) && thr->place == 0)
     {
