@@ -312,8 +312,6 @@ gomp_end_task (void)
 
   gomp_finish_task (task);
   thr->task = task->parent;
-//   free(task);
-//   task = NULL;
 }
 
 /* Clear the parent field of every task in LIST.  */
@@ -789,15 +787,15 @@ gomp_end_task ();
 		task->fn(task->fn_data);
 		thr->task = parent;
 		gomp_finish_task(task);
-		// free(task);
+		free(task);
 		GOMP_ATOMIC_DEC(&team->xtask_count);
 		// gomp_debug(0, "[tid=%d] wenyi(GOMP_task): NOT PUSHED!!!!!!!! team->xtask_count=%ld \n\n",omp_get_thread_num(), team->xtask_count);
 		return;
 	}
-	if(task->parent == NULL){
-		gomp_debug(0, "[tid=%d] wenyi(GOMP_task): parent is NULL\n",omp_get_thread_num());
-		// task->parent = parent;
-	}
+	// if(task->parent == NULL){
+	// 	gomp_debug(0, "[tid=%d] wenyi(GOMP_task): parent is NULL\n",omp_get_thread_num());
+	// 	// task->parent = parent;
+	// }
 	// gomp_debug(0, "[tid=%d][thr=%p] wenyi(GOMP_task): task->parent=%p \n\n",omp_get_thread_num(), thr, task->parent);
 	// GOMP_ATOMIC_INC(&task->td_incomplete_child_tasks);
 	// GOMP_ATOMIC_DEC(&task->td_incomplete_child_tasks);
@@ -1820,14 +1818,14 @@ bool cancelled = false;
 		// 	to_free = NULL;
 		// }
 
-		// if (to_free){
-		// 	// gomp_debug(0, "[tid=%d] wenyi(gomp_barrier_handle_tasks): before to_free=%p\n", omp_get_thread_num(), to_free);
-		// 	gomp_finish_task (to_free);
-		// 	free (to_free);
-		// // #pragma GCC diagnostic ignored "-Wuse-after-free"
-		// 	// gomp_debug(0, "[tid=%d] wenyi(gomp_barrier_handle_tasks): after to_free=%p\n", omp_get_thread_num(), to_free);
-		// 	to_free = NULL;
-		// }
+		if (to_free){
+			// gomp_debug(0, "[tid=%d] wenyi(gomp_barrier_handle_tasks): before to_free=%p\n", omp_get_thread_num(), to_free);
+			gomp_finish_task (to_free);
+			free (to_free);
+		// #pragma GCC diagnostic ignored "-Wuse-after-free"
+			// gomp_debug(0, "[tid=%d] wenyi(gomp_barrier_handle_tasks): after to_free=%p\n", omp_get_thread_num(), to_free);
+			to_free = NULL;
+		}
 
 		// count = get_task_count();
 	}
@@ -2191,12 +2189,12 @@ GOMP_taskwait (void)
 			child_task = NULL;
 		}
 		
-		// if (to_free){
-		// 	gomp_finish_task (to_free);
-		// 	free (to_free);
-		// 	to_free = NULL;
-		// }
-		to_free = NULL;
+		if (to_free){
+			gomp_finish_task (to_free);
+			free (to_free);
+			to_free = NULL;
+		}
+		// to_free = NULL;
 
 	}
 
