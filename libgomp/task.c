@@ -776,12 +776,12 @@ gomp_end_task ();
 	    }
 	}
 #ifdef GOMP_USE_XQUEUE
-// unsigned long gtid = (unsigned long)omp_get_thread_num();
-// gomp_mutex_unlock (&team->task_lock);
+	GOMP_ATOMIC_INC(&task->parent->td_incomplete_child_tasks);
+	GOMP_ATOMIC_INC(&team->xtask_count);
 	if(gomp_push_task (task) == TASK_NOT_PUSHED){
 		// execute it right away
-
-		GOMP_ATOMIC_INC(&team->xtask_count);
+		GOMP_ATOMIC_DEC(&task->parent->td_incomplete_child_tasks);
+		// GOMP_ATOMIC_INC(&team->xtask_count);
 		task->kind = GOMP_TASK_TIED;
 		thr->task = task;
 		task->fn(task->fn_data);
@@ -792,16 +792,8 @@ gomp_end_task ();
 		// gomp_debug(0, "[tid=%d] wenyi(GOMP_task): NOT PUSHED!!!!!!!! team->xtask_count=%ld \n\n",omp_get_thread_num(), team->xtask_count);
 		return;
 	}
-	// if(task->parent == NULL){
-	// 	gomp_debug(0, "[tid=%d] wenyi(GOMP_task): parent is NULL\n",omp_get_thread_num());
-	// 	// task->parent = parent;
-	// }
-	// gomp_debug(0, "[tid=%d][thr=%p] wenyi(GOMP_task): task->parent=%p \n\n",omp_get_thread_num(), thr, task->parent);
-	// GOMP_ATOMIC_INC(&task->td_incomplete_child_tasks);
-	// GOMP_ATOMIC_DEC(&task->td_incomplete_child_tasks);
-	GOMP_ATOMIC_INC(&task->parent->td_incomplete_child_tasks);
-	// gomp_debug(0, "[tid=%d] wenyi(GOMP_task): ACCESS SUCCESS: task->td_incomplete_child_tasks=%ld \n\n",omp_get_thread_num(), task->td_incomplete_child_tasks);
-	GOMP_ATOMIC_INC(&team->xtask_count);
+
+
 
 #endif
 #ifndef GOMP_USE_XQUEUE
@@ -1829,7 +1821,7 @@ bool cancelled = false;
 
 		// count = get_task_count();
 	}
-	gomp_debug(0, "[tid=%d] wenyi(xtask_handle_tasks): EXIT!!\n", omp_get_thread_num());
+	// gomp_debug(0, "[tid=%d] wenyi(xtask_handle_tasks): EXIT!!\n", omp_get_thread_num());
 }
 #endif
 void
@@ -1915,7 +1907,7 @@ bool cancelled = false;
 		if (to_free){
 			gomp_debug(0, "[tid=%d] wenyi(gomp_barrier_handle_tasks): before to_free=%p\n", omp_get_thread_num(), to_free);
 			gomp_finish_task (to_free);
-			// free (to_free);
+			free (to_free);
 		#pragma GCC diagnostic ignored "-Wuse-after-free"
 			gomp_debug(0, "[tid=%d] wenyi(gomp_barrier_handle_tasks): after to_free=%p\n", omp_get_thread_num(), to_free);
 			to_free = NULL;
