@@ -2080,13 +2080,15 @@ GOMP_taskwait (void)
 // has to reimplement our own version of taskwait;
 
 	while(GOMP_ATOMIC_LD_ACQ(&thr->task->td_incomplete_child_tasks)!=0){
-		// GOMP_taskwait
-		// if(gtid == 0){
-			// long child_count = GOMP_ATOMIC_LD_ACQ(&task->td_incomplete_child_tasks);
-			// gomp_debug(0, "[tid=%d] wenyi(GOMP_taskwait): task_count=%ld, children=%ld \n", omp_get_thread_num(), get_task_count(), child_count);
-		// }
-		
+		// GOMP_taskwait	
 		bool cancelled = false;
+		
+		if (to_free){
+			gomp_finish_task (to_free);
+			free (to_free);
+			to_free = NULL;
+		}
+
 		next_task = NULL;
 		if(use_own_tasks){
 			next_task = gomp_remove_my_task();
@@ -2150,6 +2152,7 @@ GOMP_taskwait (void)
 			thr->task = task; // wenyi: task resumed
 		}else continue;
 		// gomp_sem_wait (&taskwait.taskwait_sem);
+		// wenyi: wait in gnu's context indicates nothing in the queue, not suitable for our purpose. NOT SURE if it only waits when there is nothing in both of the queues or if there is nothing in either queues
 		
 		if(!use_own_tasks && thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_head] != NULL){
 			use_own_tasks = 1;
@@ -2180,14 +2183,6 @@ GOMP_taskwait (void)
 			to_free = child_task;
 			child_task = NULL;
 		}
-		
-		if (to_free){
-			gomp_finish_task (to_free);
-			free (to_free);
-			to_free = NULL;
-		}
-		// to_free = NULL;
-
 	}
 
 	bool destroy_taskwait = task->taskwait != NULL;

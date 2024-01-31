@@ -778,7 +778,7 @@ struct gomp_team
 #ifdef GOMP_USE_XQUEUE
 #define TASK_DEQUE_SIZE(td) ((td)->td_deque_size)
 #define TASK_DEQUE_MASK(td) ((td)->td_deque_size - 1)
-#define INITIAL_TASK_BITS 8
+#define INITIAL_TASK_BITS 5
 #define INITIAL_TASK_DEQUE_SIZE (1 << INITIAL_TASK_BITS)
 
 /* This structure contains task queue for xqueue implementation. */
