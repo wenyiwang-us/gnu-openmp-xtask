@@ -81,7 +81,7 @@ void
 gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
 {
   unsigned int generation, gen;
-  // gomp_debug(0, "[tid=%d]wenyi (gomp_team_barrier_wait_end): entry.\n", omp_get_thread_num());
+  gomp_debug(0, "[tid=%d]wenyi (gomp_team_barrier_wait_end): entry.\n", omp_get_thread_num());
   if (__builtin_expect (state & BAR_WAS_LAST, 0))
     {
       gomp_debug(0, "[tid=%d]wenyi (gomp_team_barrier_wait_end): BAR_WAS_LAST.\n", omp_get_thread_num());
@@ -93,14 +93,17 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
       team->work_share_cancelled = 0;
       if (__builtin_expect(team->task_count || !GOMP_ATOMIC_LD_ACQ(&team->final_spin), 0))
 	{
-	  gomp_barrier_handle_tasks (state);
+	  //gomp_barrier_handle_tasks (state);
+    gomp_debug(0, "[tid=%d] Wenyi (gomp_team_barrier_wait_end): BAR_WAS_LAST, before xtask_handle_tasks.\n", omp_get_thread_num());
+    xtask_handle_tasks();
 	  state &= ~BAR_WAS_LAST;
 	}
       else
 	{
 	  state &= ~BAR_CANCELLED;
 	  state += BAR_INCR - BAR_WAS_LAST;
-    // state |= BAR_WAITING_FOR_TASK;
+    state |= BAR_WAITING_FOR_TASK;
+    gomp_debug(0, "[tid=%d] Wenyi (gomp_team_barrier_wait_end): BAR_WAS_LAST, before __atomic_store_n.\n", omp_get_thread_num());
 	  __atomic_store_n (&bar->generation, state, MEMMODEL_RELEASE);
 	  futex_wake ((int *) &bar->generation, INT_MAX);
     gomp_debug(0, "[tid=%d]wenyi (gomp_team_barrier_wait_end): BAR_WAS_LAST, after futex_wake.\n", omp_get_thread_num());
@@ -129,13 +132,14 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
 void
 gomp_team_barrier_wait (gomp_barrier_t *bar)
 {
+  gomp_debug(0, "[tid=%d] Wenyi(gomp_team_barrier_wait) start\n", omp_get_thread_num());
   gomp_team_barrier_wait_end (bar, gomp_barrier_wait_start (bar));
 }
 
 void
 gomp_team_barrier_wait_final (gomp_barrier_t *bar)
 {
-  // gomp_debug(0, "wenyi(gomp_team_barrier_wait_final): entry.\n");
+  gomp_debug(0, "wenyi(gomp_team_barrier_wait_final): entry.\n");
   gomp_barrier_state_t state = gomp_barrier_wait_final_start (bar);
   if (__builtin_expect (state & BAR_WAS_LAST, 0))
     bar->awaited_final = bar->total;

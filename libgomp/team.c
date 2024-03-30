@@ -134,14 +134,16 @@ gomp_thread_start (void *xdata)
       gomp_simple_barrier_wait (&pool->threads_dock);
       do
 	{
-	//   struct gomp_team *team = thr->ts.team;
+	  struct gomp_team *team = thr->ts.team;
 	  struct gomp_task *task = thr->task;
+	  gomp_debug(0, "[tid=%d]Wenyi(gomp_thread_start) Before local_fn, xtask_counts=%ld.\n", omp_get_thread_num(), team->xtask_count);
 	  local_fn (local_data);
-
-	// gomp_debug(0, "[tid=%d]wenyi(gomp_thread_start): nthreads=%d.\n", omp_get_thread_num(), team->nthreads);
-
-	xtask_team_barrier_wait();
+	  gomp_debug(0, "[tid=%d]Wenyi(gomp_thread_start) After local_fn, xtask_count=%ld.\n", omp_get_thread_num(), team->xtask_count);
+	// gomp_team_barrier_wait_final (&team->barrier);
+		xtask_team_barrier_wait();
 	  gomp_finish_task (task);
+	// gomp_debug(0, "[tid=%d]wenyi(gomp_thread_start): nthreads=%d.\n", omp_get_thread_num(), team->nthreads);
+	
 	//   gomp_debug(0, "[tid=%d]wenyi(gomp_thread_start): Before team_simple_barrier_wait,task_count=%ld, gen=%ld\n", omp_get_thread_num(), get_task_count() ,team->generation);
 	//   gomp_debug(0, "[tid=%d]wenyi(gomp_thread_start): Ready to exit.", omp_get_thread_num());
 			
@@ -153,7 +155,7 @@ gomp_thread_start (void *xdata)
 	}
       while (local_fn);
     }
-
+	gomp_debug(0, "[tid=%d]Wenyi(gomp_thread_start) Afterx2 local_fn.\n", omp_get_thread_num());
   gomp_sem_destroy (&thr->release);
   pthread_detach (pthread_self ());
   thr->thread_pool = NULL;
@@ -352,7 +354,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 		 unsigned flags, struct gomp_team *team,
 		 struct gomp_taskgroup *taskgroup)
 {
-  gomp_debug(0, "wenyi: gomp_team_startv1.2.\n");
+  gomp_debug(0, "Wenyi[TID=%d]: gomp_team_startv1.3.\n", omp_get_thread_num());
   struct gomp_thread_start_data *start_data = NULL;
   struct gomp_thread *thr, *nthr;
   struct gomp_task *task;
@@ -994,6 +996,7 @@ gomp_team_end (void)
      As #pragma omp cancel parallel might get awaited count in
      team->barrier in a inconsistent state, we need to use a different
      counter here.  */
+	 gomp_debug(10, "wenyi: gomp_team_end.\n");
 	 xtask_team_barrier_wait();
 	
 //   gomp_team_barrier_wait_final (&team->barrier);
