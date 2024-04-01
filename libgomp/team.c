@@ -136,11 +136,11 @@ gomp_thread_start (void *xdata)
 	{
 	  struct gomp_team *team = thr->ts.team;
 	  struct gomp_task *task = thr->task;
-	  gomp_debug(0, "[tid=%d]Wenyi(gomp_thread_start) Before local_fn, xtask_counts=%ld.\n", omp_get_thread_num(), team->xtask_count);
+	  gomp_debug(200, "[tid=%d]Wenyi(gomp_thread_start) Before local_fn, xtask_counts=%ld.\n", omp_get_thread_num(), team->xtask_count);
 	  local_fn (local_data);
-	  gomp_debug(0, "[tid=%d]Wenyi(gomp_thread_start) After local_fn, xtask_count=%ld.\n", omp_get_thread_num(), team->xtask_count);
-	// gomp_team_barrier_wait_final (&team->barrier);
-		xtask_team_barrier_wait();
+	  gomp_debug(200, "[tid=%d]Wenyi(gomp_thread_start) After local_fn, xtask_count=%ld.\n", omp_get_thread_num(), team->xtask_count);
+		gomp_team_barrier_wait_final (&team->barrier);
+		// xtask_team_barrier_wait();
 	  gomp_finish_task (task);
 	// gomp_debug(0, "[tid=%d]wenyi(gomp_thread_start): nthreads=%d.\n", omp_get_thread_num(), team->nthreads);
 	
@@ -241,7 +241,7 @@ gomp_new_team (unsigned nthreads)
 	// GOMP_ATOMIC_ST_RLX(&team->final_spin, 0);
 	// xtask_barrier_init(&team->xtask_barrier, nthreads);
 	GOMP_ATOMIC_ST_REL(&team->xtask_count, 0);
-	GOMP_ATOMIC_ST_RLX(&team->generation, team->nthreads);
+	// GOMP_ATOMIC_ST_RLX(&team->generation, team->nthreads);
 	team->tl_task_count = gomp_malloc(sizeof(long) * nthreads);
 	for(int i = 0; i < nthreads; i++)
 		GOMP_ATOMIC_ST_RLX(&team->tl_task_count[i], 0);
@@ -997,9 +997,9 @@ gomp_team_end (void)
      team->barrier in a inconsistent state, we need to use a different
      counter here.  */
 	 gomp_debug(10, "wenyi: gomp_team_end.\n");
-	 xtask_team_barrier_wait();
+	//  xtask_team_barrier_wait();
 	
-//   gomp_team_barrier_wait_final (&team->barrier);
+  gomp_team_barrier_wait_final (&team->barrier);
   if (__builtin_expect (team->team_cancelled, 0))
     {
       struct gomp_work_share *ws = team->work_shares_to_free;

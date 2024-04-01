@@ -566,7 +566,7 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
   struct gomp_thread *thr = gomp_thread ();
   struct gomp_team *team = thr->ts.team;
   int priority = 0;
-  gomp_debug(50, "[tid=%d] wenyi(GOMP_task): start: team_id=%d.\n",omp_get_thread_num(), thr->ts.team_id);
+  gomp_debug(200, "[tid=%d] wenyi(GOMP_task): start: team_id=%d.\n",omp_get_thread_num(), thr->ts.team_id);
 	if(thr->td_task_q == NULL)
 	  	gomp_alloc_task_q(thr);
 
@@ -691,7 +691,7 @@ gomp_end_task ();
       char *arg;
     //   bool do_wake;
       size_t depend_size = 0;
-	  gomp_debug(10, "[tid=%d] wenyi(GOMP_task): Constructing.\n", omp_get_thread_num());
+	  gomp_debug(200, "[tid=%d] wenyi(GOMP_task): Constructing.\n", omp_get_thread_num());
 
 	//   if(taskgroup)
 	//   	gomp_debug(0, "[tid=%d] wenyi(GOMP_task): Have taskgroup.\n", omp_get_thread_num());
@@ -1646,86 +1646,86 @@ gomp_task_run_post_remove_taskgroup (struct gomp_task *child_task)
 
 
 #ifdef GOMP_USE_XQUEUE
-void xtask_team_barrier_wait(){
-	struct gomp_thread *thr = gomp_thread();
-	struct gomp_team *team = thr->ts.team;
-	// struct gomp_task *task = thr->task;
-	gomp_debug(50, "[tid=%d] wenyi(xtask_team_barrier_wait): count=%ld, generation=%ld \n", omp_get_thread_num(),team->xtask_count, team->generation);
+// void xtask_team_barrier_wait(){
+// 	struct gomp_thread *thr = gomp_thread();
+// 	struct gomp_team *team = thr->ts.team;
+// 	// struct gomp_task *task = thr->task;
+// 	gomp_debug(50, "[tid=%d] wenyi(xtask_team_barrier_wait): count=%ld, generation=%ld \n", omp_get_thread_num(),team->xtask_count, team->generation);
 
-	// long gen = GOMP_ATOMIC_DEC(&team->generation);
-	// long count = 0;
-	// bool final_spin=false;
-	// long gen = GOMP_ATOMIC_DEC(&team->generation);
-	// while(GOMP_ATOMIC_LD_ACQ(&team->xtask_count)!=0 || GOMP_ATOMIC_LD_ACQ(&task->td_incomplete_child_tasks)!=0)
-	// gomp_mutex_lock(&team->task_lock);
-	GOMP_ATOMIC_DEC(&team->generation);
-	// gomp_mutex_unlock(&team->task_lock);
-	xtask_handle_tasks();
-
-
+// 	// long gen = GOMP_ATOMIC_DEC(&team->generation);
+// 	// long count = 0;
+// 	// bool final_spin=false;
+// 	// long gen = GOMP_ATOMIC_DEC(&team->generation);
+// 	// while(GOMP_ATOMIC_LD_ACQ(&team->xtask_count)!=0 || GOMP_ATOMIC_LD_ACQ(&task->td_incomplete_child_tasks)!=0)
+// 	// gomp_mutex_lock(&team->task_lock);
+// 	GOMP_ATOMIC_DEC(&team->generation);
+// 	// gomp_mutex_unlock(&team->task_lock);
+// 	xtask_handle_tasks();
 
 
 
-	// while(GOMP_ATOMIC_LD_ACQ(&team->generation)){
-	// 	if(GOMP_ATOMIC_LD_ACQ(&team->xtask_count) == 0 && GOMP_ATOMIC_LD_ACQ(&task->td_incomplete_child_tasks) == 0 && !final_spin){
-	// 		GOMP_ATOMIC_DEC(&team->generation);
-	// 		// if we are the last thread
-	// 		// we hit the barrier again
-	// 		return;
-	// 	}
-	// 	GOMP_ATOMIC_ST_REL(&team->generation, team->nthreads);
-	// 	xtask_handle_tasks();
 
-	// 	if(GOMP_ATOMIC_LD_ACQ(&team->generation) - 1 == 0){
-	// 		final_spin = true;
-	// 		continue;
-	// 	}
-	// 	// // else if xtask_count == 0,
-	// 	// // no tasks, but still need for generation
-	// 	// if(GOMP_ATOMIC_LD_ACQ(&team->generation) - 1 ==0){
-	// 	// 	final_spin = true;
-	// 	// 	continue;
-	// 	// }
-	// 	// if(final_spin){
-	// 	// 	if(GOMP_ATOMIC_DEC(&team->generation)==0)
-	// 	// 		return;
-	// 	// 	else
-	// 	// 		continue;
-	// 	// }
-	// 	// gomp_debug(0, "[tid=%d] wenyi(xtask_team_barrier_wait): count=%ld, generation=%ld \n", omp_get_thread_num(),team->xtask_count, team->generation);
-	// 	// GOMP_ATOMIC_DEC(&team->generation);
 
-	// 	// for(int i = 0; i < thr->ts.team->nthreads; i++){
-	// 	// count += GOMP_ATOMIC_LD_ACQ(&thr->ts.team->tl_task_count[i]);
-	// 	// // gomp_debug(0, "[tid=%d] i=%d wenyi(xtask_team_barrier_wait): count=%ld, generation=%ld\n", omp_get_thread_num(),i, count, team->generation);
-	// 	// 	if(count>0){
-	// 	// 		// detect tasks, still cannot finish yet
+// 	// while(GOMP_ATOMIC_LD_ACQ(&team->generation)){
+// 	// 	if(GOMP_ATOMIC_LD_ACQ(&team->xtask_count) == 0 && GOMP_ATOMIC_LD_ACQ(&task->td_incomplete_child_tasks) == 0 && !final_spin){
+// 	// 		GOMP_ATOMIC_DEC(&team->generation);
+// 	// 		// if we are the last thread
+// 	// 		// we hit the barrier again
+// 	// 		return;
+// 	// 	}
+// 	// 	GOMP_ATOMIC_ST_REL(&team->generation, team->nthreads);
+// 	// 	xtask_handle_tasks();
+
+// 	// 	if(GOMP_ATOMIC_LD_ACQ(&team->generation) - 1 == 0){
+// 	// 		final_spin = true;
+// 	// 		continue;
+// 	// 	}
+// 	// 	// // else if xtask_count == 0,
+// 	// 	// // no tasks, but still need for generation
+// 	// 	// if(GOMP_ATOMIC_LD_ACQ(&team->generation) - 1 ==0){
+// 	// 	// 	final_spin = true;
+// 	// 	// 	continue;
+// 	// 	// }
+// 	// 	// if(final_spin){
+// 	// 	// 	if(GOMP_ATOMIC_DEC(&team->generation)==0)
+// 	// 	// 		return;
+// 	// 	// 	else
+// 	// 	// 		continue;
+// 	// 	// }
+// 	// 	// gomp_debug(0, "[tid=%d] wenyi(xtask_team_barrier_wait): count=%ld, generation=%ld \n", omp_get_thread_num(),team->xtask_count, team->generation);
+// 	// 	// GOMP_ATOMIC_DEC(&team->generation);
+
+// 	// 	// for(int i = 0; i < thr->ts.team->nthreads; i++){
+// 	// 	// count += GOMP_ATOMIC_LD_ACQ(&thr->ts.team->tl_task_count[i]);
+// 	// 	// // gomp_debug(0, "[tid=%d] i=%d wenyi(xtask_team_barrier_wait): count=%ld, generation=%ld\n", omp_get_thread_num(),i, count, team->generation);
+// 	// 	// 	if(count>0){
+// 	// 	// 		// detect tasks, still cannot finish yet
 				
-	// 	// 		//reset generation
-	// 	// 		GOMP_ATOMIC_ST_RLX(&team->generation, team->nthreads);
-	// 	// 		// gomp_debug(0, "[tid=%d] i=%d wenyi(xtask_team_barrier_wait): has_task, count=%ld\n", omp_get_thread_num(),i, count);
+// 	// 	// 		//reset generation
+// 	// 	// 		GOMP_ATOMIC_ST_RLX(&team->generation, team->nthreads);
+// 	// 	// 		// gomp_debug(0, "[tid=%d] i=%d wenyi(xtask_team_barrier_wait): has_task, count=%ld\n", omp_get_thread_num(),i, count);
 			
-	// 	// 		xtask_handle_tasks();
-	// 	// 		count = 0;
-	// 	// 	}
-	// 	// }
+// 	// 	// 		xtask_handle_tasks();
+// 	// 	// 		count = 0;
+// 	// 	// 	}
+// 	// 	// }
 
-	// 	// if(count <=0){
-	// 	// 	// long gen0 = GOMP_ATOMIC_LD_ACQ(&team->generation);
-	// 	// 	// long gen = GOMP_ATOMIC_INC(&team->generation);
-	// 	// 	// gomp_debug(0, "[tid=%d] wenyi(xtask_team_barrier_wait): gen0=%ld, gen=%ld\n", omp_get_thread_num(), gen0, gen);
-	// 	// 	if(GOMP_ATOMIC_DEC(&team->generation)<=0)
-	// 	// 		return;
-	// 	// 		// do a last spin
-	// 	// }
+// 	// 	// if(count <=0){
+// 	// 	// 	// long gen0 = GOMP_ATOMIC_LD_ACQ(&team->generation);
+// 	// 	// 	// long gen = GOMP_ATOMIC_INC(&team->generation);
+// 	// 	// 	// gomp_debug(0, "[tid=%d] wenyi(xtask_team_barrier_wait): gen0=%ld, gen=%ld\n", omp_get_thread_num(), gen0, gen);
+// 	// 	// 	if(GOMP_ATOMIC_DEC(&team->generation)<=0)
+// 	// 	// 		return;
+// 	// 	// 		// do a last spin
+// 	// 	// }
 		
-	// }
-	// return;
-}
+// 	// }
+// 	// return;
+// }
 
 
 
-void xtask_handle_tasks(){
+void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
 	struct gomp_thread *thr = gomp_thread ();
 	struct gomp_team *team = thr->ts.team;
 	struct gomp_task *task = thr->task;
@@ -1736,18 +1736,30 @@ void xtask_handle_tasks(){
 	unsigned int use_own_tasks = 1, new_victim = 0;
 	unsigned long last_qid = (thr->num_queues <= gtid) ? 1 : gtid;
   	// gomp_debug(0, "[tid=%d]wenyi(xtask_barrier_handle_tasks): task_count=%d, task_running=%d, task_queued=%d\n", omp_get_thread_num(), team->task_count, team->task_running_count, team->task_queued_count);
-	gomp_debug(0, "[tid=%d]wenyi(gomp_barrier_handle_tasks): barrier_waiting=%d,"
-	" xtask_count=%ld", 
-	omp_get_thread_num(), gomp_team_barrier_waiting_for_tasks (&team->barrier), team->xtask_count);
-
+	gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): barrier_waiting=%d,"
+	" xtask_count=%ld, generation=%d. \n", 
+	omp_get_thread_num(), gomp_team_barrier_waiting_for_tasks (&team->barrier), team->xtask_count, team->barrier.generation);
+		if(gomp_barrier_last_thread(state)){
+			gomp_team_barrier_done(&team->barrier, state);
+			gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): LAST THREAD, generation=%d\n", omp_get_thread_num(), team->barrier.generation);
+		// 	gomp_debug(0, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): last thread, wake up, xtask_count=%ld\n", omp_get_thread_num(), team->xtask_count);
+		// 	gomp_team_barrier_wake(&team->barrier, 0);
+		// 	// gomp_team_barrier_set_waiting_for_tasks(&team->barrier);
+		}
 
 bool cancelled = false;
 // long count = get_task_count();
-	while(GOMP_ATOMIC_LD_ACQ(&team->xtask_count)!=0 || GOMP_ATOMIC_LD_ACQ(&thr->task->td_incomplete_child_tasks)!=0 || GOMP_ATOMIC_LD_ACQ(&team->generation)!=0){
+	while(GOMP_ATOMIC_LD_ACQ(&team->xtask_count)!=0 || GOMP_ATOMIC_LD_ACQ(&thr->task->td_incomplete_child_tasks)!=0){
 		// gomp_debug(0, "[tid=%d]wenyi(xtasks_handle_tasks): task_count=%d, task_running=%d, task_queued=%d\n", omp_get_thread_num(), team->task_count, team->task_running_count, team->task_queued_count);
 		// gomp_debug(10, "[tid=%d]wenyi(xtasks_handle_tasks): xtask_count=%ld, generation=%ld, child_tasks=%ld\n", omp_get_thread_num(), team->xtask_count, team->generation, task->td_incomplete_child_tasks);
 		// xtasks_handle_task
 		cancelled = false;
+		// gomp_team_barrier_set_task_pending (&team->barrier);
+		// if(gomp_barrier_last_thread(state)){
+		// 	gomp_debug(0, "[tid=%d] Wenyi (xtask_barrier_handle_tasks): last thread, wake up, xtask_count=%ld\n", omp_get_thread_num(), team->xtask_count);
+		// 	gomp_team_barrier_wake(&team->barrier, 0);
+		// 	gomp_team_barrier_set_waiting_for_tasks(&team->barrier);
+		// }
 		
 		if(use_own_tasks){
 			child_task = gomp_remove_my_task();
@@ -1823,7 +1835,7 @@ bool cancelled = false;
 
 		// count = get_task_count();
 	}
-	gomp_debug(10, "[tid=%d] wenyi(xtask_handle_tasks): EXIT!!\n", omp_get_thread_num());
+	gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): EXIT!!\n", omp_get_thread_num());
 }
 #endif
 

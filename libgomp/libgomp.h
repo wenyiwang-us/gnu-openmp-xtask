@@ -1056,8 +1056,8 @@ gomp_finish_task (struct gomp_task *task)
 }
 #ifdef GOMP_USE_XQUEUE
 extern void gomp_alloc_task_q(struct gomp_thread *thr);
-extern void xtask_team_barrier_wait();
-extern void xtask_handle_tasks ();
+// extern void xtask_team_barrier_wait();
+extern void xtask_barrier_handle_tasks (gomp_barrier_state_t);
 extern long get_task_count();
 #endif
 /* team.c */

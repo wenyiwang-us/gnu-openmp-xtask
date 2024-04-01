@@ -40,8 +40,14 @@
 void
 gomp_vdebug (int kind __attribute__ ((unused)), const char *msg, va_list list)
 {
+#ifdef GOMP_USE_XQUEUE
+  if(gomp_debug_var >= kind)
+    vfprintf (stderr, msg, list);
+#else
+
   if (gomp_debug_var)
     vfprintf (stderr, msg, list);
+#endif
 }
 
 #undef gomp_debug
