@@ -61,6 +61,78 @@ gomp_debug (int kind, const char *msg, ...)
   va_end (list);
 }
 
+#ifdef GOMP_USE_XQUEUE
+#undef xtask_debug
+void concat(char *dest, const char *src1, const char *src2){
+  while(*src1){
+    *dest = *src1;
+    src1++;
+    dest++;
+  }
+  while(*src2){
+    *dest = *src2;
+    src2++;
+    dest++;
+  }
+  *dest = '\0';
+}
+void
+xtask_debug (int kind, int level, const char* func, const char *msg, ...)
+{
+  va_list list;
+
+  if (gomp_debug_var >= kind)
+    {
+      va_start (list, msg);
+
+      char tabs[64], prefix[128], buf[1024];
+      // build tabs
+      int i = 0;
+      while(i < level){
+        tabs[2 * i] = ' ';
+        tabs[2 * i + 1] = ' ';
+        i++;
+      }
+      tabs[2 * i] = '\0';
+
+      sprintf(prefix, "[tid=%d]%s(%s): ", omp_get_thread_num(), tabs, func);
+      sprintf(buf, "%s%s\n", prefix, msg);
+      // print all at once so that the output is not interleaved
+      vfprintf (stderr, buf, list);
+      va_end (list);
+    }
+}
+
+#ifdef XTASK_ENABLE_PROF
+#undef xtask_prof
+void xtask_prof (int kind, int level, const char* func, const char *msg, ...)
+{
+  va_list list;
+
+  if (gomp_debug_var >= kind)
+    {
+      va_start (list, msg);
+
+      char tabs[64], prefix[128], buf[1024];
+      // build tabs
+      int i = 0;
+      while(i < level){
+        tabs[2 * i] = ' ';
+        tabs[2 * i + 1] = ' ';
+        i++;
+      }
+      tabs[2 * i] = '\0';
+
+      sprintf(prefix, "[XTASK-PROFLING][tid=%d]:%s ", omp_get_thread_num(), tabs);
+      sprintf(buf, "%s%s\n", prefix, msg);
+      // print all at once so that the output is not interleaved
+      vfprintf (stderr, buf, list);
+      va_end (list);
+    }
+}
+#endif
+#endif
+
 void
 gomp_verror (const char *fmt, va_list list)
 {

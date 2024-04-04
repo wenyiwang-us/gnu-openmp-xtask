@@ -96,6 +96,7 @@ gomp_team_barrier_wake (gomp_barrier_t *bar, int count)
    * 
   */
 void gomp_team_barrier_wait_end(gomp_barrier_t *bar, gomp_barrier_state_t state){
+  // xtask_debug(10, 2, "enters gomp_team_barrier_wait_end.");
   // unsigned int generation, gen;
   unsigned int gen;
   gomp_debug(200, "[tid=%d]xtask: (gomp_team_barrier_wait_end): entry. debugvar=%d\n", omp_get_thread_num(), gomp_debug_var);
@@ -103,24 +104,23 @@ void gomp_team_barrier_wait_end(gomp_barrier_t *bar, gomp_barrier_state_t state)
   
   while(1){
     xtask_barrier_handle_tasks(state); // should return only when task resource has been depleted
-    gomp_debug(100, "[tid=%d] <barrier-wait-end>: generation=%d, state=%d, state+BAR_INCR=%d\n", omp_get_thread_num(), bar->generation, state, state+BAR_INCR);
+    // gomp_debug(100, "[tid=%d] <barrier-wait-end>: generation=%d, state=%d, state+BAR_INCR=%d\n", omp_get_thread_num(), bar->generation, state, state+BAR_INCR);
     gen = __atomic_load_n(&bar->generation, MEMMODEL_ACQUIRE);
     if(__builtin_expect(gen == state + BAR_INCR, 0)){
-      gomp_debug(100, "[tid=%d] <barrier-wait-end>: RETURNING, generation=%d, state=%d.\n", omp_get_thread_num(), bar->generation, state);
       return;
     }
     if(__builtin_expect(state & BAR_WAS_LAST, 0)){
-      gomp_debug(99, "[tid=%d] <barrier-wait-end>: BAR_WAS_LAST.\n", omp_get_thread_num());
       bar->awaited = bar->total;
       state &= ~BAR_CANCELLED;
       state += BAR_INCR - BAR_WAS_LAST;
       __atomic_store_n(&bar->generation, state, MEMMODEL_RELEASE);
       // futex_wake((int *)&bar->generation, INT_MAX);
+      xtask_debug(20, 2, "exits gomp_team_barrier_wait_end.");
       return;
     }
     state &= ~BAR_CANCELLED;
   }
-   
+  xtask_debug(20, 2, "exits gomp_team_barrier_wait_end.");
   return;
 }
 #else
@@ -275,26 +275,3 @@ gomp_team_barrier_cancel (struct gomp_team *team)
   gomp_mutex_unlock (&team->task_lock);
   futex_wake ((int *) &team->barrier.generation, INT_MAX);
 }
-
-#ifdef GOMP_USE_XQUEUE
-// void xtask_team_barrier_wait(struct gomp_team *team){
-//   unsigned long count = 0;
-//   bool has_task;
-//   while(true){
-//     has_task = false;
-//     for(int i = 0; i < bar->total; i++){
-//       count += GOMP_ATOMIC_LD_ACQ(&team->thread_pool->threads[i]->tl_task_count);
-//       if(count){
-//         has_task = true;
-//         //TODO: keep running tasks
-//         xtask_handle_tasks();
-//         count = 0;
-//       }
-//     }
-//   if(!has_task)
-//     break;
-//   }
-//   return;
-// }
-
-#endif
