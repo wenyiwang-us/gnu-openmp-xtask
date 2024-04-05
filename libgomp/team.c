@@ -1023,13 +1023,6 @@ gomp_team_end (void)
   gomp_end_task ();
   #if defined(GOMP_USE_XQUEUE) && defined(XTASK_ENABLE_PROF)
 	xstats_summary(2);
-//   unsigned long total_task_count = 0;
-//   for(int i = 0; i < team->nthreads; i++){
-// 	  total_task_count += thr->thread_pool->threads[i]->xd.thr_task_executed;
-// 	  xtask_prof(10, 0, "Thread Task Count T[%d]=%ld", thr->thread_pool->threads[i]->ts.team_id, thr->thread_pool->threads[i]->xd.thr_task_executed);
-//   }
-  
-//   xtask_prof(10, 0, "Total Task Count=%ld", total_task_count);
   // team states changes after the following line, from observation, team_end is usually called by the GOMP_parallel_end
   #endif
   thr->ts = team->prev_ts;

@@ -31,7 +31,6 @@
 #include <string.h>
 #include <assert.h>
 #include "gomp-constants.h"
-#include <stdio.h>
 
 typedef struct gomp_task_depend_entry *hash_entry_type;
 
@@ -335,11 +334,9 @@ inline void xstats_summary(int level){
 				xd->thr_cc_idle_min,
 				xd->thr_cc_start, xd->thr_cc_end);
 				if(level == 2){
-					// double thr_util = (double)(100 * xd->thr_cc_task_total / (xd->thr_cc_task_total + xd->thr_cc_idle_total));
 					double thr_util_lb = (double)(100 * xd->thr_cc_task_total / (xd->thr_cc_end - xd->thr_cc_start));
 					double task_avg = (double)(100 * xd->thr_task_executed / total_task_count);
 					double stall = (double) (100 * xd->thr_cc_stall/ (xd->thr_cc_end - xd->thr_cc_start));
-					// double idle_avg = (double)xd->thr_idx_idle / total_idle_index;
 					gomp_debug(0, "Thread %d: Workshare=%.2f%%, Thread Utilization=%.2f, Thread stall: %.2f\n", i,  task_avg, thr_util_lb, stall);
 				}
 		
@@ -363,9 +360,7 @@ gomp_init_task (struct gomp_task *task, struct gomp_task *parent_task,
      benchmark the overhead of creating tasks as there are millions of
      tiny tasks created that all run undeferred.  */
   task->parent = parent_task;
-#ifndef GOMP_USE_XQUEUE
   priority_queue_init (&task->children_queue);
-#endif
   task->taskgroup = NULL;
   task->dependers = NULL;
   task->depend_hash = NULL;
@@ -380,8 +375,7 @@ gomp_init_task (struct gomp_task *task, struct gomp_task *parent_task,
   task->copy_ctors_done = false;
   task->parent_depends_on = false;
 #ifdef GOMP_USE_XQUEUE
-  	// gomp_debug(0, "[tid=%d] wenyi(gomp_init_task): end.\n", omp_get_thread_num());
-	GOMP_ATOMIC_ST_RLX(&task->td_incomplete_child_tasks, 0);
+  GOMP_ATOMIC_ST_RLX(&task->td_incomplete_child_tasks, 0);
 #endif
 }
 
@@ -650,12 +644,6 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
   struct gomp_team *team = thr->ts.team;
   int priority = 0;
 
-#ifdef GOMP_USE_XQUEUE
-  gomp_debug(200, "[tid=%d] wenyi(GOMP_task): start: team_id=%d.\n",omp_get_thread_num(), thr->ts.team_id);
-	if(thr->td_task_q == NULL)
-	  	gomp_alloc_task_q(thr);
-#endif
-
 #ifdef HAVE_BROKEN_POSIX_SEMAPHORES
   /* If pthread_mutex_* is used for omp_*lock*, then each task must be
      tied to one thread all the time.  This means UNTIED tasks must be
@@ -665,6 +653,18 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
     if_clause = false;
   flags &= ~GOMP_TASK_FLAG_UNTIED;
 #endif
+  
+#ifdef GOMP_USE_XQUEUE
+	/*
+	flags & GOMP_TASK_FLAG_UNTIED: 1 - untied
+	!(flags & ~GOMP_TASK_FLAG_UNTIED): 1 - only untied
+	*/
+	bool use_xq = (flags & GOMP_TASK_FLAG_UNTIED) && !((flags & ~GOMP_TASK_FLAG_UNTIED));
+	// xtask_debug(0, 0, "use_xq=%d, (flags & GOMP_TASK_FLAG_UNTIED)=%d, !(flags|~GOMP_TASK_FLAG_UNTIED)=%d, %d\n", use_xq, (flags & GOMP_TASK_FLAG_UNTIED), (flags & ~GOMP_TASK_FLAG_UNTIED), ~GOMP_TASK_FLAG_UNTIED);
+	if(thr->td_task_q == NULL)
+		gomp_alloc_task_q(thr);
+#endif
+
 
   /* If parallel or taskgroup has been cancelled, don't start new tasks.  */
   if (__builtin_expect (gomp_cancel_var, 0) && team)
@@ -693,7 +693,6 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
       || (thr->task && thr->task->final_task)
       || team->task_count > 64 * team->nthreads)
     {
-	//   gomp_debug(0, "[tid=%d]wenyi (GOMP_task): Too many task_count.\n", omp_get_thread_num());
       struct gomp_task task;
       gomp_sem_t completion_sem;
 
@@ -757,30 +756,28 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 	 child thread, but seeing a stale non-NULL value is not a
 	 problem.  Once past the task_lock acquisition, this thread
 	 will see the real value of task.children.  */
-#ifndef GOMP_USE_XQUEUE
+	 #ifdef GOMP_USE_XQUEUE
+	if(__builtin_expect(!use_xq, 0)){ // if not use xq - begin
+	 #endif
       if (!priority_queue_empty_p (&task.children_queue, MEMMODEL_RELAXED))
 	{
 	  gomp_mutex_lock (&team->task_lock);
 	  gomp_clear_parent (&task.children_queue);
 	  gomp_mutex_unlock (&team->task_lock);
 	}
-gomp_end_task ();	
-#endif
-    //   gomp_debug (0, "Reached here.\n");
+	gomp_end_task ();
+	#ifdef GOMP_USE_XQUEUE
+	} // if not use xq - end
+	#endif	
 }
   else
     {
-	 // GOMP_task 
       struct gomp_task *task;
       struct gomp_task *parent = thr->task;
       struct gomp_taskgroup *taskgroup = parent->taskgroup;
       char *arg;
-    //   bool do_wake;
+      bool do_wake;
       size_t depend_size = 0;
-	  gomp_debug(200, "[tid=%d] wenyi(GOMP_task): Constructing.\n", omp_get_thread_num());
-
-	//   if(taskgroup)
-	//   	gomp_debug(0, "[tid=%d] wenyi(GOMP_task): Have taskgroup.\n", omp_get_thread_num());
 
       if (flags & GOMP_TASK_FLAG_DEPEND)
 	depend_size = ((uintptr_t) (depend[0] ? depend[0] : depend[1])
@@ -818,7 +815,10 @@ gomp_end_task ();
       task->fn = fn;
       task->fn_data = arg;
       task->final_task = (flags & GOMP_TASK_FLAG_FINAL) >> 1;
-    //   gomp_mutex_lock (&team->task_lock);
+	  #ifdef GOMP_USE_XQUEUE
+	  if(__builtin_expect(!use_xq, 0))
+	  #endif
+      gomp_mutex_lock (&team->task_lock);
       /* If parallel or taskgroup has been cancelled, don't start new
 	 tasks.  */
       if (__builtin_expect (gomp_cancel_var, 0)
@@ -827,7 +827,10 @@ gomp_end_task ();
 	  if (gomp_team_barrier_cancelled (&team->barrier))
 	    {
 	    do_cancel:
-	    //   gomp_mutex_unlock (&team->task_lock);
+		#ifdef GOMP_USE_XQUEUE
+		if(__builtin_expect(!use_xq, 0))
+		#endif
+	      gomp_mutex_unlock (&team->task_lock);
 	      gomp_finish_task (task);
 	      free (task);
 	      return;
@@ -844,7 +847,6 @@ gomp_end_task ();
 	}
       if (taskgroup)
 	taskgroup->num_children++;
-	//wenyi: only for depend clauses, not used in this case
       if (depend_size)
 	{
 	  gomp_task_handle_depend (task, parent, depend);
@@ -857,38 +859,43 @@ gomp_end_task ();
 		 dependencies have been satisfied.  After which, they
 		 can be picked up by the various scheduling
 		 points.  */
-	    //   gomp_mutex_unlock (&team->task_lock);
+		 #ifdef GOMP_USE_XQUEUE
+		if(__builtin_expect(!use_xq, 0))
+		#endif
+	      gomp_mutex_unlock (&team->task_lock);
 	      return;
 	    }
 	}
 #ifdef GOMP_USE_XQUEUE
-	GOMP_ATOMIC_INC(&task->parent->td_incomplete_child_tasks);
-	GOMP_ATOMIC_INC(&team->xtask_count);
+	if(use_xq){
+		GOMP_ATOMIC_INC(&task->parent->td_incomplete_child_tasks);
+		GOMP_ATOMIC_INC(&team->xtask_count);
 	if(gomp_push_task (task) == TASK_NOT_PUSHED){
 		// execute it right away
 		GOMP_ATOMIC_DEC(&task->parent->td_incomplete_child_tasks);
-		// GOMP_ATOMIC_INC(&team->xtask_count);
 		task->kind = GOMP_TASK_TIED;
 		thr->task = task;
+
+		// xstats profiler
 		#ifdef XTASK_ENABLE_PROF
 		xstats_task_start();
 		#endif
+
 		task->fn(task->fn_data);
 		thr->task = parent;
 		gomp_finish_task(task);
 		free(task);
+
+		// xstats profiler
 		#ifdef XTASK_ENABLE_PROF
 		xstats_task_end();
 		#endif
+
 		GOMP_ATOMIC_DEC(&team->xtask_count);
-		// gomp_debug(0, "[tid=%d] wenyi(GOMP_task): NOT PUSHED!!!!!!!! team->xtask_count=%ld \n\n",omp_get_thread_num(), team->xtask_count);
 		return;
 	}
-
-
-
+	}else{ //!xq - begin
 #endif
-#ifndef GOMP_USE_XQUEUE
       priority_queue_insert (PQ_CHILDREN, &parent->children_queue,
 			     task, priority,
 			     PRIORITY_INSERT_BEGIN,
@@ -907,23 +914,16 @@ gomp_end_task ();
 			     /*adjust_parent_depends_on=*/false,
 			     task->parent_depends_on);
 
-	  // wenyi: do we need this? kmp maintains td_incomplete_child_tasks, but not having a global task_count
-// #endif
-// #ifndef GOMP_USE_XQUEUE
-	  ++team->task_count; // todo: wenyi: make it atomic, similar to kmp? barrier?
-      ++team->task_queued_count; // todo: wenyi: make it atomic, this is the number of GOMP_TASKS_WAITING tasks. similar to kmp? barrier?
- 
-	//   gomp_debug(0, "[tid=%d] wenyi(GOMP_task):team->task_count=%d, team->task_queued_count=%d \n\n",omp_get_thread_num(), team->task_count, team->task_queued_count);
-
-      gomp_team_barrier_set_task_pending (&team->barrier); // wenyi: this must be called with team_lock held,
-	  do_wake = team->task_running_count + !parent->in_tied_task
+      ++team->task_count;
+      ++team->task_queued_count;
+      gomp_team_barrier_set_task_pending (&team->barrier);
+      do_wake = team->task_running_count + !parent->in_tied_task
 		< team->nthreads;
-	  gomp_mutex_unlock (&team->task_lock);
-	
-    	if (do_wake)
-		gomp_team_barrier_wake (&team->barrier, 1); 
-
-	//   gomp_team_barrier_wake (&team->barrier, 1); // wenyi: this calls futex_wake, which is not atomic. inside is a syscall.
+      gomp_mutex_unlock (&team->task_lock);
+      if (do_wake)
+	gomp_team_barrier_wake (&team->barrier, 1);
+#ifdef GOMP_USE_XQUEUE
+	} //!xq - end
 #endif
     }
 }
