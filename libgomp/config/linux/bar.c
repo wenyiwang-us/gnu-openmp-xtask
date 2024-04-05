@@ -77,8 +77,11 @@ gomp_team_barrier_wake (gomp_barrier_t *bar, int count)
   futex_wake ((int *) &bar->generation, count == 0 ? INT_MAX : count);
 }
 
-
-#ifdef GOMP_USE_XQUEUE
+void
+gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
+{
+  unsigned int generation, gen;
+  #ifdef GOMP_USE_XQUEUE
   /**
    * XTask: Design new centralized busy barrier that meets the following requirements:
    * 1. The barrier should be released only when:
@@ -95,68 +98,50 @@ gomp_team_barrier_wake (gomp_barrier_t *bar, int count)
    * 2. No tasks in task queue
    * 
   */
-void gomp_team_barrier_wait_end(gomp_barrier_t *bar, gomp_barrier_state_t state){
-  // xtask_debug(10, 2, "enters gomp_team_barrier_wait_end.");
-  // unsigned int generation, gen;
-  unsigned int gen;
-  gomp_debug(200, "[tid=%d]xtask: (gomp_team_barrier_wait_end): entry. debugvar=%d\n", omp_get_thread_num(), gomp_debug_var);
-  gomp_debug(99, "[tid=%d] <barrier-wait-end>: Enters. generation=%d, state=%d.\n", omp_get_thread_num(), bar->generation, state);
-  
-  while(1){
-    xtask_barrier_handle_tasks(state); // should return only when task resource has been depleted
-    // gomp_debug(100, "[tid=%d] <barrier-wait-end>: generation=%d, state=%d, state+BAR_INCR=%d\n", omp_get_thread_num(), bar->generation, state, state+BAR_INCR);
-    gen = __atomic_load_n(&bar->generation, MEMMODEL_ACQUIRE);
-    if(__builtin_expect(gen == state + BAR_INCR, 0)){
-      return;
+  struct gomp_thread *thr = gomp_thread();
+  if(__builtin_expect(thr->use_xq, 1)){
+    while(1){
+      xtask_barrier_handle_tasks(state); // should return only when task resource has been depleted
+      // gomp_debug(100, "[tid=%d] <barrier-wait-end>: generation=%d, state=%d, state+BAR_INCR=%d\n", omp_get_thread_num(), bar->generation, state, state+BAR_INCR);
+      gen = __atomic_load_n(&bar->generation, MEMMODEL_ACQUIRE);
+      if(__builtin_expect(gen == state + BAR_INCR, 0)){
+        return;
+      }
+      if(__builtin_expect(state & BAR_WAS_LAST, 0)){
+        bar->awaited = bar->total;
+        state &= ~BAR_CANCELLED;
+        state += BAR_INCR - BAR_WAS_LAST;
+        __atomic_store_n(&bar->generation, state, MEMMODEL_RELEASE);
+        // futex_wake((int *)&bar->generation, INT_MAX);
+        xtask_debug(20, 2, "exits gomp_team_barrier_wait_end.");
+        return;
     }
-    if(__builtin_expect(state & BAR_WAS_LAST, 0)){
-      bar->awaited = bar->total;
       state &= ~BAR_CANCELLED;
-      state += BAR_INCR - BAR_WAS_LAST;
-      __atomic_store_n(&bar->generation, state, MEMMODEL_RELEASE);
-      // futex_wake((int *)&bar->generation, INT_MAX);
-      xtask_debug(20, 2, "exits gomp_team_barrier_wait_end.");
-      return;
     }
-    state &= ~BAR_CANCELLED;
-  }
   xtask_debug(20, 2, "exits gomp_team_barrier_wait_end.");
   return;
-}
-#else
+  }else{ // if not using xq
+  #endif
 
-void
-gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
-{
-  unsigned int generation, gen;
-  gomp_debug(200, "[tid=%d]wenyi (gomp_team_barrier_wait_end): entry.\n", omp_get_thread_num());
   if (__builtin_expect (state & BAR_WAS_LAST, 0))
     {
-      gomp_debug(0, "[tid=%d]wenyi (gomp_team_barrier_wait_end): BAR_WAS_LAST.\n", omp_get_thread_num());
       /* Next time we'll be awaiting TOTAL threads again.  */
       struct gomp_thread *thr = gomp_thread ();
       struct gomp_team *team = thr->ts.team;
 
       bar->awaited = bar->total;
       team->work_share_cancelled = 0;
-      if (__builtin_expect(GOMP_ATOMIC_LD_ACQ(&team->xtask_count) || !GOMP_ATOMIC_LD_ACQ(&team->final_spin), 0))
+      if (__builtin_expect (team->task_count, 0))
 	{
-	  //gomp_barrier_handle_tasks (state);
-    gomp_debug(0, "[tid=%d] Wenyi (gomp_team_barrier_wait_end): BAR_WAS_LAST, before xtask_handle_tasks "
-    "xtask_count=%ld, task_count=%d"
-    "\n", omp_get_thread_num(), team->xtask_count, team->task_count);
-    xtask_barrier_handle_tasks(state);
+	  gomp_barrier_handle_tasks (state);
 	  state &= ~BAR_WAS_LAST;
 	}
       else
 	{
 	  state &= ~BAR_CANCELLED;
 	  state += BAR_INCR - BAR_WAS_LAST;
-    state |= BAR_WAITING_FOR_TASK;
-    gomp_debug(0, "[tid=%d] Wenyi (gomp_team_barrier_wait_end): BAR_WAS_LAST, before __atomic_store_n.\n", omp_get_thread_num());
 	  __atomic_store_n (&bar->generation, state, MEMMODEL_RELEASE);
 	  futex_wake ((int *) &bar->generation, INT_MAX);
-    gomp_debug(0, "[tid=%d]wenyi (gomp_team_barrier_wait_end): BAR_WAS_LAST, after futex_wake.\n", omp_get_thread_num());
 	  return;
 	}
     }
@@ -165,37 +150,30 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
   state &= ~BAR_CANCELLED;
   do
     {
-      gomp_debug(50, "[tid=%d]wenyi (gomp_team_barrier_wait_end): before do_wait.\n", omp_get_thread_num());
       do_wait ((int *) &bar->generation, generation);
-      // gomp_debug(0, "wenyi (gomp_team_barrier_wait_end): after do_wait.\n");
       gen = __atomic_load_n (&bar->generation, MEMMODEL_ACQUIRE);
       if (__builtin_expect (gen & BAR_TASK_PENDING, 0))
 	{
-    xtask_barrier_handle_tasks(state);
-	  // gomp_barrier_handle_tasks (state);
+	  gomp_barrier_handle_tasks (state);
 	  gen = __atomic_load_n (&bar->generation, MEMMODEL_ACQUIRE);
 	}
       generation |= gen & BAR_WAITING_FOR_TASK;
     }
   while (gen != state + BAR_INCR);
+  #ifdef GOMP_USE_XQUEUE
+  } // end of else
+  #endif
 }
-#endif
 
 void
 gomp_team_barrier_wait (gomp_barrier_t *bar)
 {
-  gomp_debug(0, "[tid=%d] <barrier-team> (gomp_team_barrier_wait) start,"
-  "total=%d, awaited=%d, generation=%d" 
-  "\n",
-  omp_get_thread_num(), bar->total, bar->awaited, bar->generation);
-
   gomp_team_barrier_wait_end (bar, gomp_barrier_wait_start (bar));
 }
 
 void
 gomp_team_barrier_wait_final (gomp_barrier_t *bar)
 {
-  gomp_debug(100, "[tid=%d] <barrier-wait-final>: (gomp_team_barrier_wait_final): entry.\n", omp_get_thread_num());
   gomp_barrier_state_t state = gomp_barrier_wait_final_start (bar);
   if (__builtin_expect (state & BAR_WAS_LAST, 0))
     bar->awaited_final = bar->total;
