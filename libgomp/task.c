@@ -342,8 +342,8 @@ inline void xstats_summary(int level){
 		
 		}
 }
-#endif
-#endif
+#endif // XTASK_ENABLE_PROF
+#endif // GOMP_USE_XQUEUE
 
 /* Create a new task data structure.  */
 
@@ -656,15 +656,15 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
   
 #ifdef GOMP_USE_XQUEUE
 	/*
-	TODO: This is only a temporary solution, and is not correct when use mixed task clauses.
-	So if users want to enable xqueue, they will have to stick to task untied and nothing else
+	We are not going to use xq if there are incompat task clauses.
+	FIXME: However, this is only a temporary solution and is not theoretically correct. I could break when user mix the usage
+	of task clauses, when xtask can be enabled for some constructs while not for others - because race condition could occur.
+	TODO: We need information regarding whether users use other clauses before runtime starts.
 	flags & GOMP_TASK_FLAG_UNTIED: 1 - untied
 	!(flags & ~GOMP_TASK_FLAG_UNTIED): 1 - only untied
 	*/
 	thr->use_xq = (flags & GOMP_TASK_FLAG_UNTIED) && !(flags & ~GOMP_TASK_FLAG_UNTIED);
 	bool use_xq = thr->use_xq;
-	// bool use_xq = team->use_xq && (flags & GOMP_TASK_FLAG_UNTIED) && !((flags & ~GOMP_TASK_FLAG_UNTIED));
-	// xtask_debug(0, 0, "use_xq=%d, (flags & GOMP_TASK_FLAG_UNTIED)=%d, !(flags|~GOMP_TASK_FLAG_UNTIED)=%d, %d\n", use_xq, (flags & GOMP_TASK_FLAG_UNTIED), (flags & ~GOMP_TASK_FLAG_UNTIED), ~GOMP_TASK_FLAG_UNTIED);
 	if(thr->td_task_q == NULL)
 		gomp_alloc_task_q(thr);
 #endif
@@ -2049,7 +2049,7 @@ GOMP_taskwait (void)
 			else
 			{
 
-			// wenyi: TODO: this is also protected by task_lock, need to check if it is necessary
+			// ww: TODO: this is also protected by task_lock, need to check if it is necessary
 				gomp_debug(0, "[tid=%d] wenyi(GOMP_taskwait): This should never be reached!\n",omp_get_thread_num());
 			}
 			if (child_task){
@@ -2083,13 +2083,13 @@ GOMP_taskwait (void)
 					// This register an end timestamp for this thread
 					xstats_task_end();
 					#endif
-					// gomp_debug(0, "[tid=%d] wenyi(GOMP_taskwait): child_task returns.\n", omp_get_thread_num());
+
 				}
 					
 				thr->task = task; // wenyi: task resumed
 			}else continue;
 			// gomp_sem_wait (&taskwait.taskwait_sem);
-			// wenyi: wait in gnu's context indicates nothing in the queue, not suitable for our purpose. NOT SURE if it only waits when there is nothing in both of the queues or if there is nothing in either queues
+			// ww: wait in gnu's context indicates nothing in the queue, not suitable for our purpose. NOT SURE if it only waits when there is nothing in both of the queues or if there is nothing in either queues
 			
 			if(!use_own_tasks && thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_head] != NULL){
 				use_own_tasks = 1;
@@ -2100,7 +2100,7 @@ GOMP_taskwait (void)
 			
 			// gomp_mutex_lock(&team->task_lock); was there
 			if(child_task){
-				// wenyi: this isn't likely to run
+				// ww: this isn't likely to run
 				if (child_task->detach_team){
 				assert (child_task->detach_team == team);
 				child_task->kind = GOMP_TASK_DETACHED;
@@ -2126,7 +2126,6 @@ GOMP_taskwait (void)
 		task->taskwait = NULL;
 		if (destroy_taskwait)
 			gomp_sem_destroy(&taskwait.taskwait_sem);
-		// gomp_debug(0, "[tid=%d] wenyi(GOMP_taskwait): Exit taskwait.\n", omp_get_thread_num());
 		return;
 	}else{ // taskwait - no-xq begin
 #endif
@@ -2239,8 +2238,7 @@ GOMP_taskwait (void)
 	      child_task = NULL;
 	      continue;
 	    }
-// wenyi: do wake has too much of process, need to make it atomic
-// scheduling point to steal tasks and run
+
 	 finish_cancelled:;
 	  size_t new_tasks
 	    = gomp_task_run_post_handle_depend (child_task, team);
@@ -2528,7 +2526,6 @@ void
 GOMP_taskyield (void)
 {
   /* Nothing at the moment.  */
-  gomp_debug(0, "wenyi (GOMP_taskyield): entry.\n");
 }
 
 static inline struct gomp_taskgroup *
@@ -2826,7 +2823,6 @@ gomp_reduction_register (uintptr_t *data, uintptr_t *old, uintptr_t *orig,
 static void
 gomp_create_artificial_team (void)
 {
-	gomp_debug (0, "[tid=%d] wenyi(gomp_create_artificial_team): begin\n", omp_get_thread_num());
   struct gomp_thread *thr = gomp_thread ();
   struct gomp_task_icv *icv;
   struct gomp_team *team = gomp_new_team (1);
