@@ -224,15 +224,6 @@ extern void gomp_vfatal (const char *, va_list)
 extern void gomp_fatal (const char *, ...)
 	__attribute__ ((noreturn, format (printf, 1, 2)));
 
-#ifdef GOMP_USE_XQUEUE
-/*
-#define xtask_debug(KIND, ...) \
-  do { \
-    if (__builtin_expect (gomp_debug_var, 0)) \
-      (gomp_debug) ((KIND), "[XTASK]" __VA_ARGS__); \
-  } while (0)
-*/
-#endif
 struct gomp_task;
 struct gomp_taskgroup;
 struct htab;
@@ -671,8 +662,6 @@ struct gomp_task
   /* Dependencies provided and/or needed for this task.  DEPEND_COUNT
      is the number of items available.  */
   struct gomp_task_depend_entry depend[];
-
-
 };
 
 /* This structure describes a single #pragma omp taskgroup.  */
@@ -777,10 +766,9 @@ struct gomp_team
   /* This barrier is used for most synchronization of the team.  */
   gomp_barrier_t barrier;
 #ifdef GOMP_USE_XQUEUE
-  long *tl_task_count;
-  long generation;
   long xtask_count;
 #endif
+
   /* Initial work shares, to avoid allocating any gomp_work_share
      structs in the common case.  */
   struct gomp_work_share work_shares[8];
@@ -802,9 +790,7 @@ struct gomp_team
   unsigned int task_running_count;
   int work_share_cancelled;
   int team_cancelled;
-#ifdef GOMP_USE_XQUEUE
-  unsigned int final_spin;
-#endif
+
   /* Number of tasks waiting for their completion event to be fulfilled.  */
   unsigned int task_detach_count;
 
@@ -1123,7 +1109,6 @@ gomp_finish_task (struct gomp_task *task)
 }
 #ifdef GOMP_USE_XQUEUE
 extern void gomp_alloc_task_q(struct gomp_thread *thr);
-// extern void xtask_team_barrier_wait();
 extern void xtask_barrier_handle_tasks (gomp_barrier_state_t);
 extern long get_task_count();
 #ifdef XTASK_ENABLE_PROF
