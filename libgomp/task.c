@@ -1469,7 +1469,6 @@ static inline bool
 gomp_task_run_pre (struct gomp_task *child_task, struct gomp_task *parent,
 		   struct gomp_team *team)
 {
-#ifndef GOMP_USE_XQUEUE	
 #if _LIBGOMP_CHECKING_
   if (child_task->parent)
     priority_queue_verify (PQ_CHILDREN,
@@ -1496,18 +1495,17 @@ gomp_task_run_pre (struct gomp_task *child_task, struct gomp_task *parent,
   child_task->pnode[PQ_TEAM].next = NULL;
   child_task->pnode[PQ_TEAM].prev = NULL;
   child_task->kind = GOMP_TASK_TIED;
-  // wenyi: if no task in the queue, let the barrier know with clear_task_pending
-  // this is protected by the team task lock
-  // or we can use atomic operation to do similar thing but not using their barrier
-  // the following call must be protected by the team task lock
-  // gomp_team_barrier_clear_task_pending (&team->barrier);
-  // gomp_team_barrier_cancelled (&team->barrier);
-#endif
-// gomp_mutex_lock(&team->task_lock);
+  	#ifdef GOMP_USE_XQUEUE
+	// wenyi: if no task in the queue, let the barrier know with clear_task_pending
+	// this is protected by the team task lock
+	// or we can use atomic operation to do similar thing but not using their barrier
+	// the following call must be protected by the team task lock
+	// gomp_team_barrier_clear_task_pending (&team->barrier);
+	// gomp_team_barrier_cancelled (&team->barrier);
+	#endif
+
   if (--team->task_queued_count == 0)
     gomp_team_barrier_clear_task_pending (&team->barrier);
-// gomp_mutex_unlock(&team->task_lock);
-#ifndef GOMP_USE_XQUEUE
   if (__builtin_expect (gomp_cancel_var, 0)
       && !child_task->copy_ctors_done)
     {
@@ -1523,12 +1521,6 @@ gomp_task_run_pre (struct gomp_task *child_task, struct gomp_task *parent,
 	    return true;
 	}
     }
-// #else
-// int num = GOMP_ATOMIC_DEC(&team->task_queued_count);
-// gomp_debug(0, "[tid=%d] wenyi(gomp_task_run_pre): num=%d\n",omp_get_thread_num(),num);
-// if (GOMP_ATOMIC_DEC(&team->task_queued_count) == 0)
-	// gomp_team_barrier_clear_task_pending (&team->barrier);
-#endif
   return false;
 }
 
@@ -1538,9 +1530,6 @@ gomp_task_run_post_handle_depend_hash (struct gomp_task *child_task)
   struct gomp_task *parent = child_task->parent;
   size_t i;
 
-#ifdef GOMP_USE_XQUEUE
-  gomp_debug(0, "[tid=%d] wenyi(gomp_task_run_post_handle_depend_hash):\n",omp_get_thread_num());
-#endif
   for (i = 0; i < child_task->depend_count; i++)
     if (!child_task->depend[i].redundant)
       {
@@ -1577,7 +1566,6 @@ gomp_task_run_post_handle_dependers (struct gomp_task *child_task,
 {
   struct gomp_task *parent = child_task->parent;
   size_t i, count = child_task->dependers->n_elem, ret = 0;
-  gomp_debug(0, "[tid=%d] wenyi(gomp_taskZ_run_post_handle_dependers):\n", omp_get_thread_num());
   for (i = 0; i < count; i++)
     {
       struct gomp_task *task = child_task->dependers->elem[i];
@@ -1652,9 +1640,6 @@ static inline size_t
 gomp_task_run_post_handle_depend (struct gomp_task *child_task,
 				  struct gomp_team *team)
 {
-#ifdef GOMP_USE_XQUEUE
-	// gomp_debug(0, "[tid=%d] wenyi(gomp_task_run_post_handle_depend):\n", omp_get_thread_num());
-#endif
   if (child_task->depend_count == 0)
     return 0;
 
@@ -1685,11 +1670,10 @@ gomp_task_run_post_remove_parent (struct gomp_task *child_task)
       && --parent->taskwait->n_depend == 0
       && parent->taskwait->in_depend_wait)
     {
-	gomp_debug(0, "[tid=%d] wenyi(gomp_task_run_post_remove_parent):\n", omp_get_thread_num());
       parent->taskwait->in_depend_wait = false;
       gomp_sem_post (&parent->taskwait->taskwait_sem);
     }
-#ifndef GOMP_USE_XQUEUE
+
   if (priority_queue_remove (PQ_CHILDREN, &parent->children_queue,
 			     child_task, MEMMODEL_RELEASE)
       && parent->taskwait && parent->taskwait->in_taskwait)
@@ -1699,7 +1683,6 @@ gomp_task_run_post_remove_parent (struct gomp_task *child_task)
     }
   child_task->pnode[PQ_CHILDREN].next = NULL;
   child_task->pnode[PQ_CHILDREN].prev = NULL;
-#endif
 }
 
 /* Remove CHILD_TASK from its taskgroup.  */
@@ -1710,8 +1693,6 @@ gomp_task_run_post_remove_taskgroup (struct gomp_task *child_task)
   struct gomp_taskgroup *taskgroup = child_task->taskgroup;
   if (taskgroup == NULL)
     return;
-
-#ifndef GOMP_USE_XQUEUE
   bool empty = priority_queue_remove (PQ_TASKGROUP,
 				      &taskgroup->taskgroup_queue,
 				      child_task, MEMMODEL_RELAXED);
@@ -1733,7 +1714,6 @@ gomp_task_run_post_remove_taskgroup (struct gomp_task *child_task)
       taskgroup->in_taskgroup_wait = false;
       gomp_sem_post (&taskgroup->taskgroup_sem);
     }
-#endif
 }
 
 
@@ -1850,91 +1830,23 @@ gomp_barrier_handle_tasks (gomp_barrier_state_t state)
   struct gomp_task *to_free = NULL;
   int do_wake = 0;
 
-#ifdef GOMP_USE_XQUEUE
-	unsigned long gtid = (unsigned long)omp_get_thread_num();
-	unsigned int use_own_tasks = 1, new_victim = 0;
-	unsigned long last_qid = (thr->num_queues <= gtid) ? 1 : gtid;
-  	gomp_debug(0, "[tid=%d]wenyi(gomp_barrier_handle_tasks): task_count=%d, task_running=%d, task_queued=%d\n", omp_get_thread_num(), team->task_count, team->task_running_count, team->task_queued_count);
-	// gomp_debug(0, "[tid=%d]wenyi(gomp_barrier_handle_tasks): barrier_waiting=%d \n", omp_get_thread_num(), gomp_team_barrier_waiting_for_tasks (&team->barrier));
-
-
-bool cancelled = false;
-	while(1){
-		cancelled = false;
-		
-		if(use_own_tasks){
-			child_task = gomp_remove_my_task();
-		}
-
-		if((child_task == NULL) && (thr->num_queues > 1)){
-			use_own_tasks = 0;
-			child_task = gomp_remove_aux_task(&last_qid);
-		}
-
-		//bogus for victim
-		if(new_victim)
-			new_victim = new_victim;
-
-		if(child_task){
-			//TODO: handle cancle
-			GOMP_ATOMIC_DEC(&thr->tl_task_queued_count);
-			child_task->kind = GOMP_TASK_TIED;
-			child_task->in_tied_task = true;
-			
-			if (__builtin_expect (cancelled, 0)){
-				if (to_free){
-					gomp_finish_task (to_free);
-					free (to_free);
-					to_free = NULL;
-				}
-				goto finish_cancelled;
-			}
-			thr->task = child_task;
-			if (__builtin_expect (child_task->fn == NULL, 0)){
-				if (gomp_target_task_fn (child_task->fn_data)){
-				gomp_debug(0, "[tid=%d] wenyi(gomp_barrier_handle_tasks): unexpected.\n", omp_get_thread_num());
-				continue;
-				}
-				}
-			else
-				child_task->fn (child_task->fn_data);
-			thr->task = task;
-		}else break;
-
-		if (do_wake){
-		gomp_team_barrier_wake (&team->barrier, do_wake);
-		do_wake = 0;
-		}
-
-		if(!use_own_tasks && thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_head] != NULL){
-			use_own_tasks = 1;
-			new_victim = 0;	
-		}
-
-		if (child_task)
-		{
-			GOMP_ATOMIC_DEC (&child_task->parent->td_incomplete_child_tasks);
-			
-			finish_cancelled:;
-			to_free = child_task;
-			child_task = NULL;
-		}
-		
-		if (to_free){
-			gomp_debug(0, "[tid=%d] wenyi(gomp_barrier_handle_tasks): before to_free=%p\n", omp_get_thread_num(), to_free);
-			gomp_finish_task (to_free);
-			free (to_free);
-		#pragma GCC diagnostic ignored "-Wuse-after-free"
-			gomp_debug(0, "[tid=%d] wenyi(gomp_barrier_handle_tasks): after to_free=%p\n", omp_get_thread_num(), to_free);
-			to_free = NULL;
-		}
-
-}
-#endif
-#ifndef GOMP_USE_XQUEUE
-  while (1)
+  gomp_mutex_lock (&team->task_lock);
+  if (gomp_barrier_last_thread (state))
+    {
+      if (team->task_count == 0)
 	{
-		bool cancelled = false;
+	  gomp_team_barrier_done (&team->barrier, state);
+	  gomp_mutex_unlock (&team->task_lock);
+	  gomp_team_barrier_wake (&team->barrier, 0);
+	  return;
+	}
+      gomp_team_barrier_set_waiting_for_tasks (&team->barrier);
+    }
+
+  while (1)
+    {
+      bool cancelled = false;
+
       if (!priority_queue_empty_p (&team->task_queue, MEMMODEL_RELAXED))
 	{
 	  bool ignored;
@@ -2048,8 +1960,6 @@ bool cancelled = false;
 	  --team->task_count;
 	}
     }
-#endif
-
 }
 
 /* Called when encountering a taskwait directive.
