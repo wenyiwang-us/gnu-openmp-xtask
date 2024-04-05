@@ -656,10 +656,14 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
   
 #ifdef GOMP_USE_XQUEUE
 	/*
+	TODO: This is only a temporary solution, and is not correct when use mixed task clauses.
+	So if users want to enable xqueue, they will have to stick to task untied and nothing else
 	flags & GOMP_TASK_FLAG_UNTIED: 1 - untied
 	!(flags & ~GOMP_TASK_FLAG_UNTIED): 1 - only untied
 	*/
-	bool use_xq = (flags & GOMP_TASK_FLAG_UNTIED) && !((flags & ~GOMP_TASK_FLAG_UNTIED));
+	thr->use_xq = (flags & GOMP_TASK_FLAG_UNTIED) && !(flags & ~GOMP_TASK_FLAG_UNTIED);
+	bool use_xq = thr->use_xq;
+	// bool use_xq = team->use_xq && (flags & GOMP_TASK_FLAG_UNTIED) && !((flags & ~GOMP_TASK_FLAG_UNTIED));
 	// xtask_debug(0, 0, "use_xq=%d, (flags & GOMP_TASK_FLAG_UNTIED)=%d, !(flags|~GOMP_TASK_FLAG_UNTIED)=%d, %d\n", use_xq, (flags & GOMP_TASK_FLAG_UNTIED), (flags & ~GOMP_TASK_FLAG_UNTIED), ~GOMP_TASK_FLAG_UNTIED);
 	if(thr->td_task_q == NULL)
 		gomp_alloc_task_q(thr);
@@ -1975,6 +1979,7 @@ GOMP_taskwait (void)
   struct gomp_task *child_task = NULL;
   struct gomp_task *to_free = NULL;
   struct gomp_taskwait taskwait;
+  int do_wake = 0;
 
   /* The acquire barrier on load of task->children here synchronizes
      with the write of a NULL in gomp_task_run_post_remove_parent.  It is
@@ -1983,148 +1988,149 @@ GOMP_taskwait (void)
      child thread task work function are seen before we exit from
      GOMP_taskwait.  */
 #ifdef GOMP_USE_XQUEUE
-	if (task == NULL)
-		return;
-#else 
+	if(__builtin_expect(thr->use_xq, 1)){
+		if (task == NULL)
+			return;
+	}
+	else
+#endif
   if (task == NULL
       || priority_queue_empty_p (&task->children_queue, MEMMODEL_ACQUIRE))
     return;
-#endif
+
   memset (&taskwait, 0, sizeof (taskwait));
-#ifndef GOMP_USE_XQUEUE 
   bool child_q = false;
-#endif
 
 #ifdef GOMP_USE_XQUEUE
 	unsigned long gtid = (unsigned long)omp_get_thread_num();
 	unsigned int use_own_tasks = 1, new_victim = 0;
 	unsigned long last_qid = (thr->num_queues <= gtid) ? 1 : gtid;
 	gomp_task_t *next_task;
-// has to reimplement our own version of taskwait;
-
-	while(GOMP_ATOMIC_LD_ACQ(&thr->task->td_incomplete_child_tasks)!=0){
-		// GOMP_taskwait	
-		bool cancelled = false;
-		
-		if (to_free){
-			gomp_finish_task (to_free);
-			free (to_free);
-			to_free = NULL;
-		}
-
-		next_task = NULL;
-		if(use_own_tasks){
-			next_task = gomp_remove_my_task();
-		}
-
-		if((next_task == NULL) && (thr->num_queues > 1)){
-			use_own_tasks = 0;
-			next_task = gomp_remove_aux_task(&last_qid);
-		}
-		if(next_task == NULL)
-			continue;
-		
-
-		if (next_task->kind == GOMP_TASK_WAITING)
-		{	
-
-			child_task = next_task;
-			child_task->kind = GOMP_TASK_TIED; // move this out of gomp_task_run_pre, so it only handles barriers
-			child_task->in_tied_task = true;
-			if (__builtin_expect (cancelled, 0)){
-				if (to_free){
-					gomp_finish_task (to_free);
-					free (to_free);
-					to_free = NULL;
-				}
-					goto finish_cancelled;
-				}
-		}
-		else
-		{
-
-		// wenyi: TODO: this is also protected by task_lock, need to check if it is necessary
-			gomp_debug(0, "[tid=%d] wenyi(GOMP_taskwait): This should never be reached!\n",omp_get_thread_num());
-		}
-		if (child_task){
-			// task = thr->task;
-			thr->task = child_task;
-			if (__builtin_expect (child_task->fn == NULL, 0)){
-				if (gomp_target_task_fn (child_task->fn_data)){
-					thr->task = task;
-					//gomp_mutex_lock (&team->task_lock);
-					child_task->kind = GOMP_TASK_ASYNC_RUNNING;
-					struct gomp_target_task *ttask
-						= (struct gomp_target_task *) child_task->fn_data;
-					/* If GOMP_PLUGIN_target_task_completion has run already
-						in between gomp_target_task_fn and the mutex lock,
-						perform the requeuing here.  */
-					if (ttask->state == GOMP_TARGET_TASK_FINISHED)
-						gomp_target_task_completion (team, child_task);
-					else
-						ttask->state = GOMP_TARGET_TASK_RUNNING;
-					child_task = NULL;
-					continue;
-				}
+	if(__builtin_expect(thr->use_xq, 1)){
+		// has to reimplement our own version of taskwait;
+		while(GOMP_ATOMIC_LD_ACQ(&thr->task->td_incomplete_child_tasks)!=0){
+			// GOMP_taskwait	
+			bool cancelled = false;
+			
+			if (to_free){
+				gomp_finish_task (to_free);
+				free (to_free);
+				to_free = NULL;
 			}
-			else{
-				#ifdef XTASK_ENABLE_PROF
-				// Note: The closure of a start and an end doesn't represent the execution time of the task, it only register a task start event for the thread
-				xstats_task_start();
-				#endif
-				child_task->fn (child_task->fn_data);
-				#ifdef XTASK_ENABLE_PROF
-				// This register an end timestamp for this thread
-				xstats_task_end();
-				#endif
-				// gomp_debug(0, "[tid=%d] wenyi(GOMP_taskwait): child_task returns.\n", omp_get_thread_num());
+
+			next_task = NULL;
+			if(use_own_tasks){
+				next_task = gomp_remove_my_task();
 			}
-				
-			thr->task = task; // wenyi: task resumed
-		}else continue;
-		// gomp_sem_wait (&taskwait.taskwait_sem);
-		// wenyi: wait in gnu's context indicates nothing in the queue, not suitable for our purpose. NOT SURE if it only waits when there is nothing in both of the queues or if there is nothing in either queues
+
+			if((next_task == NULL) && (thr->num_queues > 1)){
+				use_own_tasks = 0;
+				next_task = gomp_remove_aux_task(&last_qid);
+			}
+			if(next_task == NULL)
+				continue;
+			
+
+			if (next_task->kind == GOMP_TASK_WAITING)
+			{	
+
+				child_task = next_task;
+				child_task->kind = GOMP_TASK_TIED; // move this out of gomp_task_run_pre, so it only handles barriers
+				child_task->in_tied_task = true;
+				if (__builtin_expect (cancelled, 0)){
+					if (to_free){
+						gomp_finish_task (to_free);
+						free (to_free);
+						to_free = NULL;
+					}
+						goto xtask_finish_cancelled;
+					}
+			}
+			else
+			{
+
+			// wenyi: TODO: this is also protected by task_lock, need to check if it is necessary
+				gomp_debug(0, "[tid=%d] wenyi(GOMP_taskwait): This should never be reached!\n",omp_get_thread_num());
+			}
+			if (child_task){
+				// task = thr->task;
+				thr->task = child_task;
+				if (__builtin_expect (child_task->fn == NULL, 0)){
+					if (gomp_target_task_fn (child_task->fn_data)){
+						thr->task = task;
+						//gomp_mutex_lock (&team->task_lock);
+						child_task->kind = GOMP_TASK_ASYNC_RUNNING;
+						struct gomp_target_task *ttask
+							= (struct gomp_target_task *) child_task->fn_data;
+						/* If GOMP_PLUGIN_target_task_completion has run already
+							in between gomp_target_task_fn and the mutex lock,
+							perform the requeuing here.  */
+						if (ttask->state == GOMP_TARGET_TASK_FINISHED)
+							gomp_target_task_completion (team, child_task);
+						else
+							ttask->state = GOMP_TARGET_TASK_RUNNING;
+						child_task = NULL;
+						continue;
+					}
+				}
+				else{
+					#ifdef XTASK_ENABLE_PROF
+					// Note: The closure of a start and an end doesn't represent the execution time of the task, it only register a task start event for the thread
+					xstats_task_start();
+					#endif
+					child_task->fn (child_task->fn_data);
+					#ifdef XTASK_ENABLE_PROF
+					// This register an end timestamp for this thread
+					xstats_task_end();
+					#endif
+					// gomp_debug(0, "[tid=%d] wenyi(GOMP_taskwait): child_task returns.\n", omp_get_thread_num());
+				}
+					
+				thr->task = task; // wenyi: task resumed
+			}else continue;
+			// gomp_sem_wait (&taskwait.taskwait_sem);
+			// wenyi: wait in gnu's context indicates nothing in the queue, not suitable for our purpose. NOT SURE if it only waits when there is nothing in both of the queues or if there is nothing in either queues
+			
+			if(!use_own_tasks && thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_head] != NULL){
+				use_own_tasks = 1;
+				new_victim = 0;
+			}
+			if(new_victim)
+				new_victim = new_victim;
+			
+			// gomp_mutex_lock(&team->task_lock); was there
+			if(child_task){
+				// wenyi: this isn't likely to run
+				if (child_task->detach_team){
+				assert (child_task->detach_team == team);
+				child_task->kind = GOMP_TASK_DETACHED;
+				++team->task_detach_count;
+				gomp_debug (0,
+					"thread %d: task with event %p finished without "
+					"completion event fulfilled in taskwait\n",
+					thr->ts.team_id, child_task);
+				child_task = NULL;
+				continue;
+				}
+
+				GOMP_ATOMIC_DEC(&child_task->parent->td_incomplete_child_tasks);
+				GOMP_ATOMIC_DEC(&team->xtask_count);
 		
-		if(!use_own_tasks && thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_head] != NULL){
-			use_own_tasks = 1;
-			new_victim = 0;
+				xtask_finish_cancelled:;
+				to_free = child_task;
+				child_task = NULL;
+			}
 		}
-		if(new_victim)
-			new_victim = new_victim;
-		
-		// gomp_mutex_lock(&team->task_lock); was there
-		if(child_task){
-			// wenyi: this isn't likely to run
-			if (child_task->detach_team){
-	      	assert (child_task->detach_team == team);
-			child_task->kind = GOMP_TASK_DETACHED;
-			++team->task_detach_count;
-			gomp_debug (0,
-				"thread %d: task with event %p finished without "
-				"completion event fulfilled in taskwait\n",
-				thr->ts.team_id, child_task);
-			child_task = NULL;
-			continue;
-	    	}
 
-			GOMP_ATOMIC_DEC(&child_task->parent->td_incomplete_child_tasks);
-			GOMP_ATOMIC_DEC(&team->xtask_count);
-	
-			finish_cancelled:;
-			to_free = child_task;
-			child_task = NULL;
-		}
-	}
-
-	bool destroy_taskwait = task->taskwait != NULL;
-	task->taskwait = NULL;
-	if (destroy_taskwait)
-		gomp_sem_destroy(&taskwait.taskwait_sem);
-	// gomp_debug(0, "[tid=%d] wenyi(GOMP_taskwait): Exit taskwait.\n", omp_get_thread_num());
-	return;
-
+		bool destroy_taskwait = task->taskwait != NULL;
+		task->taskwait = NULL;
+		if (destroy_taskwait)
+			gomp_sem_destroy(&taskwait.taskwait_sem);
+		// gomp_debug(0, "[tid=%d] wenyi(GOMP_taskwait): Exit taskwait.\n", omp_get_thread_num());
+		return;
+	}else{ // taskwait - no-xq begin
 #endif
-#ifndef GOMP_USE_XQUEUE
+
   gomp_mutex_lock (&team->task_lock);
   while (1)
     {
@@ -2263,11 +2269,10 @@ GOMP_taskwait (void)
 	    }
 	}
     }
-
+#ifdef GOMP_USE_XQUEUE
+	} // taskwait - no-xq end
 #endif
 }
-
-
 
 /* Called when encountering a taskwait directive with depend clause(s).
    Wait as if it was an mergeable included task construct with empty body.  */

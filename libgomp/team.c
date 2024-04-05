@@ -106,6 +106,7 @@ gomp_thread_start (void *xdata)
   pool = thr->thread_pool;
   // WENYI TODO: initialize task_queue to NULL. gomp_task_init will allocate memory for task_queue if NULL. 
 #ifdef GOMP_USE_XQUEUE
+	thr->use_xq = true;
 	GOMP_ATOMIC_ST_RLX(&thr->tl_task_count, 0); // init task count to 0
 #ifdef XTASK_ENABLE_PROF
 	xstats_init();
@@ -373,10 +374,11 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
   pool = thr->thread_pool;
   task = thr->task;
   icv = task ? &task->icv : &gomp_global_icv;
-  // wenyi:
 #ifdef GOMP_USE_XQUEUE
-  gomp_num_task_queues = nthreads;
-  gomp_alloc_task_q(thr);
+	// team->use_xq = true; // default to true
+	thr->use_xq = true;
+  	gomp_num_task_queues = nthreads;
+  	gomp_alloc_task_q(thr);
 #endif
   if (__builtin_expect (gomp_places_list != NULL, 0) && thr->place == 0)
     {

@@ -781,6 +781,7 @@ struct gomp_team
   long *tl_task_count;
   long generation;
   long xtask_count;
+  // bool use_xq;
 #endif
   /* Initial work shares, to avoid allocating any gomp_work_share
      structs in the common case.  */
@@ -881,7 +882,8 @@ struct gomp_thread
   int td_deque_ntasks;
   int td_deque_last_stolen;
   unsigned long tl_task_count; // thread local task count
-  unsigned long tl_task_queued_count;;
+  unsigned long tl_task_queued_count;
+  bool use_xq; // use xq or not, default is yes, when incompat clauses appeared, will use default GNU tasking implementation
 #ifdef XTASK_ENABLE_PROF
   struct xstats_data xd;
 #endif
