@@ -42,16 +42,6 @@ typedef struct
   unsigned awaited_final;
 } gomp_barrier_t;
 
-#ifdef GOMP_USE_XQUEUE
-typedef struct
-{
-  int dirty_bit;
-  unsigned total __attribute__((aligned (64)));
-  unsigned generations;
-} xtask_barrier_t;
-
-#endif /* GOMP_USE_XQUEUE */
-
 typedef unsigned int gomp_barrier_state_t;
 
 /* The generation field contains a counter in the high bits, with a few

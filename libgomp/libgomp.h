@@ -777,11 +777,9 @@ struct gomp_team
   /* This barrier is used for most synchronization of the team.  */
   gomp_barrier_t barrier;
 #ifdef GOMP_USE_XQUEUE
-  xtask_barrier_t xtask_barrier;
   long *tl_task_count;
   long generation;
   long xtask_count;
-  // bool use_xq;
 #endif
   /* Initial work shares, to avoid allocating any gomp_work_share
      structs in the common case.  */
