@@ -663,7 +663,7 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 	flags & GOMP_TASK_FLAG_UNTIED: 1 - untied
 	!(flags & ~GOMP_TASK_FLAG_UNTIED): 1 - only untied
 	*/
-	thr->use_xq = (flags & GOMP_TASK_FLAG_UNTIED) && !(flags & ~GOMP_TASK_FLAG_UNTIED);
+	thr->use_xq = (flags & GOMP_TASK_FLAG_UNTIED) && !(flags & ~GOMP_TASK_FLAG_UNTIED) && (thr->use_xq);
 	bool use_xq = thr->use_xq;
 	if(thr->td_task_q == NULL)
 		gomp_alloc_task_q(thr);

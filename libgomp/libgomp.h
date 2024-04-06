@@ -75,7 +75,7 @@
 #define GOMP_USE_XQUEUE 1
 #define XTASK_ENABLE_PROF 1 // xtask enable profiling
 
-#ifdef XTASK_ENABLE_PROF
+#if defined(GOMP_USE_XQUEUE) && defined(XTASK_ENABLE_PROF)
 #include <x86intrin.h>
 #endif
 /* If we were a C++ library, we'd get this from <std/atomic>.  */
