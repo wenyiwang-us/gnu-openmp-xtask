@@ -252,6 +252,8 @@ inline void xstats_init(){
 inline void xstats_task_start(){
 	struct gomp_thread *thr = gomp_thread();
 	unsigned long now = __rdtsc();
+	if(thr->xd.thr_cc_prev == 0)
+		thr->xd.thr_cc_prev = now;
 	unsigned long diff = now - thr->xd.thr_cc_prev;
 	if (diff > thr->xd.thr_cc_task_max)
 		thr->xd.thr_cc_task_max = diff;
@@ -270,10 +272,9 @@ inline void xstats_task_start(){
 inline void xstats_task_end(){
 	struct gomp_thread *thr = gomp_thread();
 	unsigned long now = __rdtsc();
-	unsigned long diff = now - thr->xd.thr_cc_prev;
-	if(thr->xd.thr_task_executed == 0){
+	if(thr->xd.thr_cc_prev == 0)
 		thr->xd.thr_cc_prev = now;
-	}
+	unsigned long diff = now - thr->xd.thr_cc_prev;
 	if (diff > thr->xd.thr_cc_idle_max)
 		thr->xd.thr_cc_idle_max = diff;
 	if (thr->xd.thr_cc_idle_min == 0 || diff < thr->xd.thr_cc_idle_min)
@@ -283,7 +284,8 @@ inline void xstats_task_end(){
 	thr->xd.thr_cc_prev = now;
 
 	thr->xd.thr_task_executed++;
-	thr->xd.thr_cc_end = now;
+	if(thr->xd.thr_cc_end < now)
+		thr->xd.thr_cc_end = now;
 
 	// reset idle state
 	thr->xd.is_stall = false;
@@ -293,6 +295,10 @@ inline void xstats_incr_idle_index(){
 	struct gomp_thread *thr = gomp_thread();
 	struct xstats_data *xd = &thr->xd;
 	unsigned long now = __rdtsc();
+	if(thr->xd.thr_cc_start <= 0)
+		thr->xd.thr_cc_start = now;
+	if(thr->xd.thr_cc_end < now)
+		thr->xd.thr_cc_end = now;
 	xd->thr_idx_idle++;
 	if(xd->is_stall == false){
 		xd->is_stall = true;
@@ -301,6 +307,7 @@ inline void xstats_incr_idle_index(){
 		unsigned long diff = now - xd->thr_cc_stall_prev;
 		xd->thr_cc_stall += diff;
 	}
+	xd->thr_cc_prev = now;
 	xd->thr_cc_stall_prev = now;
 
 }
@@ -334,10 +341,10 @@ inline void xstats_summary(int level){
 				xd->thr_cc_idle_min,
 				xd->thr_cc_start, xd->thr_cc_end);
 				if(level == 2){
-					double thr_util_lb = (double)(100 * xd->thr_cc_task_total / (xd->thr_cc_end - xd->thr_cc_start));
-					double task_avg = (double)(100 * xd->thr_task_executed / total_task_count);
-					double stall = (double) (100 * xd->thr_cc_stall/ (xd->thr_cc_end - xd->thr_cc_start));
-					gomp_debug(0, "Thread %d: Workshare=%.2f%%, Thread Utilization=%.2f, Thread stall: %.2f\n", i,  task_avg, thr_util_lb, stall);
+					double thr_util_lb = (double)(100 * ((double)xd->thr_cc_task_total / (xd->thr_cc_end - xd->thr_cc_start)));
+					double task_avg = (double)(100 * ((double)xd->thr_task_executed / total_task_count));
+					double stall = (double) (100 * ((double)xd->thr_cc_stall / (xd->thr_cc_end - xd->thr_cc_start)));
+					gomp_debug(0, "Thread %d: Workshare=%.2f%%, Thread Utilization=%.2f%%, Thread stall: %.2f%%\n", i,  task_avg, thr_util_lb, stall);
 				}
 		
 		}

@@ -632,7 +632,7 @@ expand_parallel_call (struct omp_region *region, basic_block bb,
     }
   else
     clause_loc = gimple_location (entry_stmt);
-#ifdef GCC_ENABLE_XQ_COMPAT 1
+#ifdef GCC_ENABLE_XQ_COMPAT
 	// ww: we want to inject the flag into the flags var inside the gomp_team_start
 	// originally, these flags are set when there are parallel constructs with num_threads/proc_bind clauses
 	// we want to set the bits that are not used as hidden flags that can be recognized by the gomp_team_start
@@ -643,7 +643,7 @@ expand_parallel_call (struct omp_region *region, basic_block bb,
   c = omp_find_clause (clauses, OMP_CLAUSE_PROC_BIND);
   if (c)
     flags = build_int_cst (unsigned_type_node, OMP_CLAUSE_PROC_BIND_KIND (c));
-#ifdef GCC_ENABLE_XQ_COMPAT 1
+#ifdef GCC_ENABLE_XQ_COMPAT
 	has_flags = has_flags || c;
   	// ww: a hack to determine if use xq
   	c = omp_find_clause (clauses, OMP_HIDDEN_CLAUSE_USE_XQ);
