@@ -240,6 +240,10 @@ struct gimplify_omp_ctx
   bool in_for_exprs;
   int defaultmap[5];
 };
+#ifdef GCC_ENABLE_XQ_COMPAT
+// ww: use_xq flag
+static bool use_xq = false;
+#endif
 
 static struct gimplify_ctx *gimplify_ctxp;
 static struct gimplify_omp_ctx *gimplify_omp_ctxp;
@@ -10755,6 +10759,10 @@ gimplify_scan_omp_clauses (tree *list_p, gimple_seq *pre_p,
 	case OMP_CLAUSE_BIND:
 	case OMP_CLAUSE_IF_PRESENT:
 	case OMP_CLAUSE_FINALIZE:
+	#ifdef GCC_ENABLE_XQ_COMPAT
+	case OMP_HIDDEN_CLAUSE_USE_XQ:
+	// fprintf(stderr, "ww: omp_clause_code=%d, ", OMP_CLAUSE_CODE (c));
+	#endif
 	  break;
 
 	case OMP_CLAUSE_ORDER:
@@ -11356,6 +11364,14 @@ gimplify_adjust_omp_clauses (gimple_seq *pre_p, gimple_seq body, tree *list_p,
   tree c, decl;
   bool has_inscan_reductions = false;
 
+#ifdef GCC_ENABLE_XQ_COMPAT
+	fprintf(stderr, "ww: gimplify_adjust_omp_clauses\n");
+ 	fprintf(stderr, "ww: gimplify_adjust_clauses: code=%d, use_xq=%d\n", code, use_xq);
+	if(code == OMP_TASK){
+		// TODO: further we need to identify clauses and disable xq if some clauses are not supported
+		use_xq = 1;
+	}
+#endif
   if (body)
     {
       struct gimplify_omp_ctx *octx;
@@ -11410,6 +11426,22 @@ gimplify_adjust_omp_clauses (gimple_seq *pre_p, gimple_seq body, tree *list_p,
 	    *list_p = c2;
 	  }
     }
+#ifdef GCC_ENABLE_XQ_COMPAT
+ if(code == OMP_PARALLEL && use_xq == 1){
+	tree *tmp_list_p = list_p;
+	fprintf(stderr, "ww: omp_parallel is setting flags.\n");
+	while((c = *tmp_list_p) != NULL){
+		tmp_list_p = &OMP_CLAUSE_CHAIN (c);
+		fprintf(stderr, "ww: omp clause code=%d\n", c->omp_clause.code);
+		if(tmp_list_p == NULL){
+			break;
+		}
+	}
+	c = build_omp_clause(UNKNOWN_LOCATION, OMP_HIDDEN_CLAUSE_USE_XQ);
+	OMP_CLAUSE_CHAIN(c) = *list_p;
+	*list_p = c;
+ }
+ #endif
   while ((c = *list_p) != NULL)
     {
       splay_tree_node n;
@@ -11846,6 +11878,11 @@ gimplify_adjust_omp_clauses (gimple_seq *pre_p, gimple_seq body, tree *list_p,
 	case OMP_CLAUSE_FINAL:
 	case OMP_CLAUSE_MERGEABLE:
 	case OMP_CLAUSE_PROC_BIND:
+#ifdef GCC_ENABLE_XQ_COMPAT
+	case OMP_HIDDEN_CLAUSE_USE_XQ:
+		fprintf(stderr, "ww: ADJUST CLAUSE: OMP_HIDDEN_CLAUSE_USE_XQ\n");
+		break;
+#endif
 	case OMP_CLAUSE_SAFELEN:
 	case OMP_CLAUSE_SIMDLEN:
 	case OMP_CLAUSE_DEPEND:

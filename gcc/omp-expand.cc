@@ -320,6 +320,7 @@ determine_parallel_type (struct omp_region *region)
      adding another big set of APIs or slowing down the normal paths is
      not acceptable.  */
   tree pclauses = gimple_omp_parallel_clauses (last_stmt (par_entry_bb));
+  fprintf(stderr, "determine_parallel_type: found clauses.\n");
   if (omp_find_clause (pclauses, OMP_CLAUSE__REDUCTEMP_))
     return;
 
@@ -631,11 +632,30 @@ expand_parallel_call (struct omp_region *region, basic_block bb,
     }
   else
     clause_loc = gimple_location (entry_stmt);
-
+#ifdef GCC_ENABLE_XQ_COMPAT 1
+	// ww: we want to inject the flag into the flags var inside the gomp_team_start
+	// originally, these flags are set when there are parallel constructs with num_threads/proc_bind clauses
+	// we want to set the bits that are not used as hidden flags that can be recognized by the gomp_team_start
+	// so the xq enabled runtime can either enable xq or not based on this hidden flags
+	// we arbitrarily let 32 (bit 6) to be the flag for xq
+	bool has_flags =c ? true : false; 
+#endif
   c = omp_find_clause (clauses, OMP_CLAUSE_PROC_BIND);
   if (c)
     flags = build_int_cst (unsigned_type_node, OMP_CLAUSE_PROC_BIND_KIND (c));
-
+#ifdef GCC_ENABLE_XQ_COMPAT 1
+	has_flags = has_flags || c;
+  	// ww: a hack to determine if use xq
+  	c = omp_find_clause (clauses, OMP_HIDDEN_CLAUSE_USE_XQ);
+	if(c && has_flags){
+		fprintf(stderr, "ww: Detect hidden clause!, c=%d, flags=%d\n", c, flags);
+		*flags->int_cst.val |= 32; // an arbituray bit pos for use_xq flag
+	}
+	else if(c){
+		flags = build_int_cst (unsigned_type_node, 32);
+		fprintf(stderr, "ww: Detect hidden clause!, c=%ld\n", *flags->int_cst.val);
+	}
+#endif
   /* Ensure 'val' is of the correct type.  */
   val = fold_convert_loc (clause_loc, unsigned_type_node, val);
 

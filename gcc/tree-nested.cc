@@ -1490,6 +1490,9 @@ convert_nonlocal_omp_clauses (tree *pclauses, struct walk_stmt_info *wi)
 	case OMP_CLAUSE_BIND:
 	case OMP_CLAUSE__CONDTEMP_:
 	case OMP_CLAUSE__SCANTEMP_:
+#ifdef GCC_ENABLE_XQ_COMPAT
+  case OMP_HIDDEN_CLAUSE_USE_XQ: // ww: use_xq fall-thru
+#endif
 	  break;
 
 	  /* The following clause belongs to the OpenACC cache directive, which
@@ -2285,6 +2288,9 @@ convert_local_omp_clauses (tree *pclauses, struct walk_stmt_info *wi)
 	case OMP_CLAUSE_BIND:
 	case OMP_CLAUSE__CONDTEMP_:
 	case OMP_CLAUSE__SCANTEMP_:
+#ifdef GCC_ENABLE_XQ_COMPAT
+  case OMP_HIDDEN_CLAUSE_USE_XQ: // ww: use_xq fall-thru
+#endif
 	  break;
 
 	  /* The following clause belongs to the OpenACC cache directive, which

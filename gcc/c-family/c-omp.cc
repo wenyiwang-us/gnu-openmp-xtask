@@ -1880,6 +1880,9 @@ c_omp_split_clauses (location_t loc, enum tree_code code,
 	  break;
 	case OMP_CLAUSE_COPYIN:
 	case OMP_CLAUSE_NUM_THREADS:
+#ifdef GCC_ENABLE_XQ_COMPAT
+	case OMP_HIDDEN_CLAUSE_USE_XQ: // ww: use_xq fall-thru
+#endif
 	case OMP_CLAUSE_PROC_BIND:
 	  s = C_OMP_CLAUSE_SPLIT_PARALLEL;
 	  break;

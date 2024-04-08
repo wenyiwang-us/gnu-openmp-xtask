@@ -22,6 +22,8 @@ along with GCC; see the file COPYING3.  If not see
 
 #include "symtab.h"
 
+#define GCC_ENABLE_XQ_COMPAT 1
+
 /* This file contains all the data structures that define the 'tree' type.
    There are no accessor macros nor functions in this file. Only the
    basic data structures, extern declarations and type definitions.  */
@@ -522,6 +524,11 @@ enum omp_clause_code {
 
   /* OpenACC clause: nohost.  */
   OMP_CLAUSE_NOHOST,
+
+#ifdef GCC_ENABLE_XQ_COMPAT
+  /* XTask hidden clause for a hack: ww: use_xq*/
+  OMP_HIDDEN_CLAUSE_USE_XQ,
+#endif
 };
 
 #undef DEFTREESTRUCT

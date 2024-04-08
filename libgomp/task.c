@@ -662,8 +662,12 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 	TODO: We need information regarding whether users use other clauses before runtime starts.
 	flags & GOMP_TASK_FLAG_UNTIED: 1 - untied
 	!(flags & ~GOMP_TASK_FLAG_UNTIED): 1 - only untied
+	UPDATE: Now this is fixed by letting compiler pass flags to teams, if flags & 32, then we will use xq.
+	thr->xq has been set when threads are started by the gomp_team_start
 	*/
-	thr->use_xq = (flags & GOMP_TASK_FLAG_UNTIED) && !(flags & ~GOMP_TASK_FLAG_UNTIED) && (thr->use_xq);
+	// thr->use_xq = (flags & GOMP_TASK_FLAG_UNTIED) && !(flags & ~GOMP_TASK_FLAG_UNTIED) && (thr->use_xq);
+	// // thr->use_xq = false;
+	// // xtask_debug(0,0, "flags=%d", flags);
 	bool use_xq = thr->use_xq;
 	if(thr->td_task_q == NULL)
 		gomp_alloc_task_q(thr);

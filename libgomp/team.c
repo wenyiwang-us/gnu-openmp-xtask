@@ -60,6 +60,9 @@ struct gomp_thread_start_data
   unsigned int team_num;
   bool nested;
   pthread_t handle;
+#ifdef GOMP_USE_XQUEUE
+  bool use_xq;
+#endif
 };
 
 
@@ -105,8 +108,8 @@ gomp_thread_start (void *xdata)
   pool = thr->thread_pool;
 
 #ifdef GOMP_USE_XQUEUE
-	thr->use_xq = true;
-	if(thr->td_task_q == NULL)
+	thr->use_xq = data->use_xq;
+	if(thr->use_xq && thr->td_task_q == NULL)
 	  	gomp_alloc_task_q(thr);
 #ifdef XTASK_ENABLE_PROF
 	xstats_init();
@@ -336,9 +339,6 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 		 unsigned flags, struct gomp_team *team,
 		 struct gomp_taskgroup *taskgroup)
 {
-#ifdef GOMP_USE_XQUEUE
-	xtask_debug(0, 0, "XTASK v.1.4, gomp_team_start!");
-#endif
   struct gomp_thread_start_data *start_data = NULL;
   struct gomp_thread *thr, *nthr;
   struct gomp_task *task;
@@ -362,7 +362,8 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 
 #ifdef GOMP_USE_XQUEUE
 	// team->use_xq = true; // default to true
-	thr->use_xq = true;
+	thr->use_xq = flags & 32;
+	xtask_debug(0, 0, "XTASK v.1.4, gomp_team_start!, use_xq=%d\n", thr->use_xq);
   	gomp_num_task_queues = nthreads;
   	gomp_alloc_task_q(thr);
 #endif
@@ -886,6 +887,9 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
       start_data->task->taskgroup = taskgroup;
       start_data->thread_pool = pool;
       start_data->nested = nested;
+#ifdef GOMP_USE_XQUEUE
+	  start_data->use_xq = thr->use_xq;
+#endif
 
       attr = gomp_adjust_thread_attr (attr, &thread_attr);
       err = pthread_create (&start_data->handle, attr, gomp_thread_start,

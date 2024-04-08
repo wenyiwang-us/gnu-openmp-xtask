@@ -15415,6 +15415,9 @@ c_finish_omp_clauses (tree clauses, enum c_omp_region_type ort)
 	case OMP_CLAUSE_IF_PRESENT:
 	case OMP_CLAUSE_FINALIZE:
 	case OMP_CLAUSE_NOHOST:
+#ifdef GCC_ENABLE_XQ_COMPAT
+  case OMP_HIDDEN_CLAUSE_USE_XQ: // ww: use_xq fall-thru
+#endif
 	  pc = &OMP_CLAUSE_CHAIN (c);
 	  continue;
 

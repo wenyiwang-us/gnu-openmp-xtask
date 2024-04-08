@@ -17901,6 +17901,9 @@ tsubst_omp_clauses (tree clauses, enum c_omp_region_type ort,
 	case OMP_CLAUSE_INBRANCH:
 	case OMP_CLAUSE_NOTINBRANCH:
 	case OMP_CLAUSE_PROC_BIND:
+#ifdef GCC_ENABLE_XQ_COMPAT
+  case OMP_HIDDEN_CLAUSE_USE_XQ:// ww: use_xq, fall-thru
+#endif
 	case OMP_CLAUSE_FOR:
 	case OMP_CLAUSE_PARALLEL:
 	case OMP_CLAUSE_SECTIONS:

@@ -1724,6 +1724,9 @@ scan_sharing_clauses (tree clauses, omp_context *ctx)
 	case OMP_CLAUSE_FINALIZE:
 	case OMP_CLAUSE_TASK_REDUCTION:
 	case OMP_CLAUSE_ALLOCATE:
+#ifdef GCC_ENABLE_XQ_COMPAT
+	case OMP_HIDDEN_CLAUSE_USE_XQ: // ww: use_xq fall-thru
+#endif
 	  break;
 
 	case OMP_CLAUSE_ALIGNED:
@@ -1902,6 +1905,9 @@ scan_sharing_clauses (tree clauses, omp_context *ctx)
 	case OMP_CLAUSE_FINAL:
 	case OMP_CLAUSE_MERGEABLE:
 	case OMP_CLAUSE_PROC_BIND:
+#ifdef GCC_ENABLE_XQ_COMPAT
+	case OMP_HIDDEN_CLAUSE_USE_XQ: // ww: use_xq fall-thru
+#endif
 	case OMP_CLAUSE_SAFELEN:
 	case OMP_CLAUSE_SIMDLEN:
 	case OMP_CLAUSE_ALIGNED:
