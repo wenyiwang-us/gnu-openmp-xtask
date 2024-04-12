@@ -817,12 +817,19 @@ struct xstats_data // xtask stats data
   // fine-grained stats
   unsigned long thr_cc_start; // thread cycle count start
   unsigned long thr_cc_end; // thread cycle count end
-  unsigned long thr_cc_prev; // thread cycle count previous count
+  unsigned long thr_cc_pts; // thread cycle count previous count
+  unsigned long thr_cc_tasking_start; // thread enters tasking runtime
   unsigned long thr_cc_task_total; // thread total cycle count for task execution
   unsigned long thr_cc_idle_total; // thread total idle cycle count 
   unsigned long thr_cc_stall;
-  unsigned long thr_cc_stall_prev;
+  unsigned long thr_cc_stall_pts; // previous timestamp
+  unsigned long thr_cc_stall_max;
+  unsigned long thr_cc_taskwait;
+  unsigned long thr_cc_barrier;
+  unsigned long thr_cc_xq_ops;
 
+  unsigned long thr_task_generated;
+  unsigned long thr_cc_new_task;
   unsigned long thr_cc_task_max;
   unsigned long thr_cc_task_min;
   double thr_cc_task_avg;
@@ -831,10 +838,16 @@ struct xstats_data // xtask stats data
 
   // coarse-grained stats
   // unsigned long thr_idx_idle_prev; // thread idle index, record previous checkpoint
-  unsigned long thr_idx_idle; // thread idle index
-  unsigned long thr_task_executed; // number of tasks executed by the thread
+  unsigned long thr_stall_count; // thread idle index
+  
+  unsigned long team_task_count_snapshot_acc; // team task count snapshot
+  unsigned long team_task_count_snapshot_max; // team task count snapshot
+  unsigned long team_task_count_snapshot_cutoff_count;
+  unsigned long team_task_count_snapshot_min; // team task count snapshot
+  unsigned long thr_task_executed; // number of tasks executed by the threa
 
-  bool is_stall; // thread is stalling or not
+
+  bool stalling; // thread is stalling or not
 }__attribute__((aligned(64)));
 #endif
 #endif
@@ -1118,9 +1131,13 @@ extern long get_task_count();
 #include <x86intrin.h>
 
 extern void xstats_init();
-extern void xstats_task_start();
-extern void xstats_task_end();
-extern void xstats_incr_idle_index();
+// extern void xstats_task_start();
+// extern void xstats_task_end();
+// extern void xstats_stall();
+// extern void xstats_new_task_start();
+// extern void xstats_new_task_end();
+extern void xstats_barrier_start();
+extern void xstats_barrier_end();
 extern void xstats_summary(int);
 #endif
 #endif

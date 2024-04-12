@@ -82,6 +82,7 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
 {
   unsigned int generation, gen;
   #ifdef GOMP_USE_XQUEUE
+  xstats_barrier_start();
   /**
    * XTask: Design new centralized busy barrier that meets the following requirements:
    * 1. The barrier should be released only when:
@@ -101,8 +102,10 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
   struct gomp_thread *thr = gomp_thread();
   if(__builtin_expect(thr->use_xq, 1)){
     while(1){
+      xstats_barrier_end();
       xtask_barrier_handle_tasks(state); // should return only when task resource has been depleted
       // gomp_debug(100, "[tid=%d] <barrier-wait-end>: generation=%d, state=%d, state+BAR_INCR=%d\n", omp_get_thread_num(), bar->generation, state, state+BAR_INCR);
+      xstats_barrier_start();
       gen = __atomic_load_n(&bar->generation, MEMMODEL_ACQUIRE);
       if(__builtin_expect(gen == state + BAR_INCR, 0)){
         return;
@@ -119,6 +122,7 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
       state &= ~BAR_CANCELLED;
     }
   xtask_debug(20, 2, "exits gomp_team_barrier_wait_end.");
+  xstats_barrier_end();
   return;
   }else{ // if not using xq
   #endif

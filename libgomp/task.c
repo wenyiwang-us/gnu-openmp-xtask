@@ -61,6 +61,17 @@ htab_eq (hash_entry_type x, hash_entry_type y)
 }
 
 #ifdef GOMP_USE_XQUEUE
+#ifdef XTASK_ENABLE_PROF
+static inline void xstats_stall();
+static inline void xstats_task_start();
+static inline void xstats_task_end();
+static inline void xstats_xq_ops_start();
+static inline void xstats_xq_ops_end();
+static inline void xstats_taskwait_start();
+static inline void xstats_taskwait_end();
+// static inline void xstats_barrier_start();
+// static inline void xstats_barrier_end();
+#endif
 void
 gomp_alloc_task_q(struct gomp_thread *thr){
 	if (thr->num_queues == 0)
@@ -90,6 +101,9 @@ gomp_free_task_q();
 
 static int
 gomp_push_task(struct gomp_task *task){
+#ifdef XTASK_ENABLE_PROF
+xstats_xq_ops_start();
+#endif
 	struct gomp_thread *thr = gomp_thread();
 	struct gomp_team *team = thr->ts.team;
 	unsigned long gtid = (unsigned long)omp_get_thread_num();
@@ -121,6 +135,9 @@ gomp_push_task(struct gomp_task *task){
 		num_tries++;
 		if (num_tries < 25)
 			continue;
+		#ifdef XTASK_ENABLE_PROF
+		xstats_xq_ops_end();
+		#endif
 		return TASK_NOT_PUSHED;
 	}
 	struct gomp_taskq *task_q = target_thr->td_task_q[last_q];
@@ -137,12 +154,17 @@ gomp_push_task(struct gomp_task *task){
 	}
 
 	// gomp_debug(0, "[tid=%d] wenyi(gomp_push_task): end, target_id=%ld. nthreads=%d\n", omp_get_thread_num(), target_id, team->nthreads);
-
+	#ifdef XTASK_ENABLE_PROF
+	xstats_xq_ops_end();
+	#endif
 	return TASK_SUCCESSFULLY_PUSHED;
 };
 
 static gomp_task_t* 
 gomp_remove_my_task(){
+#ifdef XTASK_ENABLE_PROF
+xstats_xq_ops_start();
+#endif
 	gomp_task_t *task;
 	struct gomp_thread *thr = gomp_thread();
 	// gomp_debug(0, "[tid=%d] wenyi(gomp_remove_my_task): start\n", omp_get_thread_num());
@@ -159,12 +181,17 @@ gomp_remove_my_task(){
 	thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_tail] = NULL;
 	thr->td_task_q[0]->td_deque_tail = (thr->td_task_q[0]->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
 	// wenyi: in kmp, there is a conversion from task to taskdata
-
+#ifdef XTASK_ENABLE_PROF
+xstats_xq_ops_end();
+#endif
 	return task;
 };
 
 static gomp_task_t*
 gomp_remove_aux_task(unsigned long *last_qid){
+	#ifdef XTASK_ENABLE_PROF
+	xstats_xq_ops_start();
+	#endif
 	gomp_task_t *task;
 	struct gomp_thread *thr = gomp_thread();
 	// unsigned int tail;
@@ -210,11 +237,14 @@ gomp_remove_aux_task(unsigned long *last_qid){
 			}
 		}
 	}
+	#ifdef XTASK_ENABLE_PROF
+	xstats_xq_ops_end();
+	#endif
 
 	// if NULL just NULL, this might be redundant
 	if(task == NULL){
 		#ifdef XTASK_ENABLE_PROF
-		xstats_incr_idle_index();
+		xstats_stall();
 		#endif
 		return NULL;
 	}
@@ -227,91 +257,284 @@ gomp_remove_aux_task(unsigned long *last_qid){
 #ifdef XTASK_ENABLE_PROF
 inline void xstats_init(){
 	struct gomp_thread *thr = gomp_thread();
-	unsigned long now = __rdtsc();
-	thr->xd.thr_cc_start = now;
-	thr->xd.thr_cc_end = 0;
-	thr->xd.thr_cc_prev = now;
-	thr->xd.thr_cc_task_total = 0;
-	thr->xd.thr_cc_idle_total = 0;
+	struct xstats_data *xd = &thr->xd;
+	// unsigned long now = __rdtsc();
+	unsigned int aux;
+	unsigned long now = __rdtscp(&aux);
 
-	thr->xd.thr_cc_stall = 0;
-	thr->xd.thr_cc_stall_prev = 0;
-	thr->xd.is_stall = false;
+	xd->stalling = false;
+	xd->thr_cc_start = now;
+	xd->thr_cc_pts = now; // previous timestamp
+	xd->thr_cc_end = 0;
+	xd->thr_cc_task_total = 0;
+	xd->thr_cc_idle_total = 0;
 
-	thr->xd.thr_cc_task_max = 0;
-	thr->xd.thr_cc_idle_max = 0;
-	thr->xd.thr_cc_task_min = 0;
-	thr->xd.thr_cc_idle_min = 0;
+	// GOMP_task
+	xd->thr_task_generated = 0;
+	xd->thr_cc_new_task = 0;
+	xd->thr_cc_tasking_start = 0;
 
-	thr->xd.thr_task_executed = 0;
-	thr->xd.thr_idx_idle = 0;
+	xd->thr_cc_stall = 0;
+	xd->thr_cc_stall_pts = 0;
+	xd->thr_cc_barrier = 0;
+	xd->thr_cc_taskwait = 0;
 
-	thr->xd.thr_cc_task_avg = .0;
+	xd->thr_cc_task_max = 0;
+	xd->thr_cc_idle_max = 0;
+	xd->thr_cc_task_min = 0;
+	xd->thr_cc_idle_min = 0;
+
+	xd->thr_task_executed = 0;
+	xd->thr_stall_count = 0;
+	xd->team_task_count_snapshot_acc = 0;
+	xd->team_task_count_snapshot_max = 0;
+	xd->team_task_count_snapshot_min = 0;
+	xd->team_task_count_snapshot_cutoff_count = 0;
+	xd->thr_cc_task_avg = .0;
 }
 
 inline void xstats_task_start(){
 	struct gomp_thread *thr = gomp_thread();
-	unsigned long now = __rdtsc();
-	if(thr->xd.thr_cc_prev == 0)
-		thr->xd.thr_cc_prev = now;
-	unsigned long diff = now - thr->xd.thr_cc_prev;
-	if (diff > thr->xd.thr_cc_task_max)
-		thr->xd.thr_cc_task_max = diff;
-	if (thr->xd.thr_cc_task_min == 0 || diff < thr->xd.thr_cc_task_min)
-		thr->xd.thr_cc_task_min = diff;
-
-	thr->xd.thr_cc_idle_total += diff;
-	thr->xd.thr_cc_prev = now;
-	if(thr->xd.thr_cc_start <= 0)
-		thr->xd.thr_cc_start = now;
-
-	// reset idle state
-	thr->xd.is_stall = false;
-}
-
-inline void xstats_task_end(){
-	struct gomp_thread *thr = gomp_thread();
-	unsigned long now = __rdtsc();
-	if(thr->xd.thr_cc_prev == 0)
-		thr->xd.thr_cc_prev = now;
-	unsigned long diff = now - thr->xd.thr_cc_prev;
-	if (diff > thr->xd.thr_cc_idle_max)
-		thr->xd.thr_cc_idle_max = diff;
-	if (thr->xd.thr_cc_idle_min == 0 || diff < thr->xd.thr_cc_idle_min)
-		thr->xd.thr_cc_idle_min = diff;
-
-	thr->xd.thr_cc_task_total += diff;
-	thr->xd.thr_cc_prev = now;
-
-	thr->xd.thr_task_executed++;
-	if(thr->xd.thr_cc_end < now)
-		thr->xd.thr_cc_end = now;
-
-	// reset idle state
-	thr->xd.is_stall = false;
-}
-
-inline void xstats_incr_idle_index(){
-	struct gomp_thread *thr = gomp_thread();
 	struct xstats_data *xd = &thr->xd;
-	unsigned long now = __rdtsc();
-	if(thr->xd.thr_cc_start <= 0)
-		thr->xd.thr_cc_start = now;
-	if(thr->xd.thr_cc_end < now)
-		thr->xd.thr_cc_end = now;
-	xd->thr_idx_idle++;
-	if(xd->is_stall == false){
-		xd->is_stall = true;
-	}
-	else{
-		unsigned long diff = now - xd->thr_cc_stall_prev;
+	// unsigned long now = __rdtsc();
+	unsigned int aux;
+	unsigned long now = __rdtscp(&aux);
+	unsigned long diff;
+	if(xd->stalling){
+		xd->stalling = false;
+		diff = now - xd->thr_cc_stall_pts;
 		xd->thr_cc_stall += diff;
 	}
-	xd->thr_cc_prev = now;
-	xd->thr_cc_stall_prev = now;
 
+	if(xd->thr_cc_pts == 0)
+		xtask_debug(0, 0, "ERROR: This should not happen.");
+
+	diff = now - xd->thr_cc_pts;
+	if (diff > xd->thr_cc_task_max)
+		xd->thr_cc_task_max = diff;
+	if (xd->thr_cc_task_min == 0 || diff < xd->thr_cc_task_min)
+		xd->thr_cc_task_min = diff;
+
+	xd->thr_cc_idle_total += diff;
+	xd->thr_cc_pts = now;
+	if(xd->thr_cc_start <= 0)
+		xtask_debug(0, 0, "ERROR: This should not happen.");
 }
 
+static inline void xstats_task_end(){
+	struct gomp_thread *thr = gomp_thread();
+	struct xstats_data *xd = &thr->xd;
+	// unsigned long now = __rdtsc();
+
+	unsigned int aux;
+	unsigned long now = __rdtscp(&aux);
+	unsigned long diff;
+
+	if(xd->thr_cc_end < now)
+		xd->thr_cc_end = now;
+	if(xd->stalling){
+		xd->stalling = false;
+		diff = now - xd->thr_cc_stall_pts;
+		xd->thr_cc_stall += diff;
+		if(diff > xd->thr_cc_stall_max)
+			xd->thr_cc_stall_max = diff;
+	}
+
+	if(xd->thr_cc_pts == 0)
+		xtask_debug(0, 0, "ERROR: This should not happen.");
+	
+	diff = now - xd->thr_cc_pts;
+	if (diff > xd->thr_cc_idle_max)
+		xd->thr_cc_idle_max = diff;
+	if (xd->thr_cc_idle_min == 0 || diff < xd->thr_cc_idle_min)
+		xd->thr_cc_idle_min = diff;
+
+	xd->thr_cc_task_total += diff;
+	xd->thr_cc_pts = now;
+
+	xd->thr_task_executed++;
+}
+
+static inline void xstats_stall(){
+	struct gomp_thread *thr = gomp_thread();
+	struct xstats_data *xd = &thr->xd;
+	unsigned long team_task_count_snapshot = thr->ts.team->xtask_count;
+	// unsigned long now = __rdtsc(); // coarse-grained
+	unsigned int aux;
+	unsigned long now = __rdtscp(&aux); // maybe fine-grained
+	if(xd->thr_cc_end < now)
+		xd->thr_cc_end = now;
+	if(xd->stalling)
+		return;
+	
+		
+	xd->stalling = true;
+	xd->thr_cc_stall_pts = now;
+	xd->thr_stall_count++;
+	if(team_task_count_snapshot > xd->team_task_count_snapshot_max)
+		xd->team_task_count_snapshot_max = team_task_count_snapshot;
+	
+	if(team_task_count_snapshot < 100*thr->ts.team->nthreads)
+		xd->team_task_count_snapshot_cutoff_count++;
+
+	// if(team_task_count_snapshot > 0){
+	// 	if(xd->team_task_count_snapshot_min == 0)
+	// 		xd->team_task_count_snapshot_min = team_task_count_snapshot;
+	// 	else
+	// 		xd->team_task_count_snapshot_min = team_task_count_snapshot < xd->team_task_count_snapshot_min ? team_task_count_snapshot : xd->team_task_count_snapshot_min;
+	// }
+
+	xd->team_task_count_snapshot_acc += thr->ts.team->xtask_count;
+	if(xd->thr_cc_start <= 0 || xd->thr_cc_start > now)
+		xtask_debug(0, 0, "ERROR: This should not happen.");
+}
+
+static inline void xstats_tasking_start(){
+	struct gomp_thread *thr = gomp_thread();
+	struct xstats_data *xd = &thr->xd;
+	if(xd->thr_cc_tasking_start == 0){
+		// unsigned long now = __rdtsc();
+		unsigned int aux;
+		unsigned long now = __rdtscp(&aux);
+		xd->thr_cc_tasking_start = now;
+	}
+}
+
+static inline void xstats_new_task_start(){
+	struct gomp_thread *thr = gomp_thread();
+	struct xstats_data *xd = &thr->xd;
+	// unsigned long now = __rdtsc();
+	unsigned int aux;
+	unsigned long now = __rdtscp(&aux);
+	unsigned long diff;
+	if(xd->thr_cc_end < now)
+		xd->thr_cc_end = now;
+	if(xd->stalling){
+		xd->stalling = false;
+		diff = now - xd->thr_cc_stall_pts;
+		xd->thr_cc_stall += diff;
+	}
+
+	if(xd->thr_cc_pts == 0)
+		xtask_debug(0, 0, "ERROR: This should not happen.");
+	
+	diff = now - xd->thr_cc_pts;
+	xd->thr_cc_pts = now;
+}
+
+static inline void xstats_new_task_end(unsigned int new){
+	struct gomp_thread *thr = gomp_thread();
+	struct xstats_data *xd = &thr->xd;
+	// unsigned long now = __rdtsc();
+	unsigned int aux;
+	unsigned long now = __rdtscp(&aux);
+	unsigned long diff;
+	if(xd->thr_cc_end < now)
+		xd->thr_cc_end = now;
+	if(xd->stalling){
+		xd->stalling = false;
+		diff = now - xd->thr_cc_stall_pts;
+		xd->thr_cc_stall += diff;
+	}
+
+	if(xd->thr_cc_pts == 0)
+		xtask_debug(0, 0, "ERROR: This should not happen.");
+	
+	diff = now - xd->thr_cc_pts;
+	xd->thr_cc_new_task += diff;
+	xd->thr_cc_pts = now;
+	xd->thr_task_generated+=new;
+}
+
+static inline void xstats_xq_ops_start(){
+	struct gomp_thread *thr = gomp_thread();
+	struct xstats_data *xd = &thr->xd;
+	// unsigned long now = __rdtsc();
+	unsigned int aux;
+	unsigned long now = __rdtscp(&aux);
+	if(xd->thr_cc_end < now)
+		xd->thr_cc_end = now;
+	if(xd->thr_cc_pts == 0)
+		xtask_debug(0, 0, "ERROR: This should not happen.");
+	xd->thr_cc_pts = now;
+}
+static inline void xstats_xq_ops_end(){
+	struct gomp_thread *thr = gomp_thread();
+	struct xstats_data *xd = &thr->xd;
+	// unsigned long now = __rdtsc();
+	unsigned int aux;
+	unsigned long now = __rdtscp(&aux);
+	unsigned long diff;
+	if(xd->thr_cc_end < now)
+		xd->thr_cc_end = now;
+	if(xd->thr_cc_pts == 0)
+		xtask_debug(0, 0, "ERROR: This should not happen.");
+	
+	diff = now - xd->thr_cc_pts;
+	xd->thr_cc_pts = now;
+	xd->thr_cc_xq_ops += diff;
+}
+
+static inline void xstats_taskwait_start(){
+	struct gomp_thread *thr = gomp_thread();
+	struct xstats_data *xd = &thr->xd;
+	// unsigned long now = __rdtsc();
+	unsigned int aux;
+	unsigned long now = __rdtscp(&aux);
+	
+	if(xd->thr_cc_end < now)
+		xd->thr_cc_end = now;
+	if(xd->thr_cc_pts == 0)
+		xtask_debug(0, 0, "ERROR: This should not happen.");
+
+	xd->thr_cc_pts = now;
+}
+static inline void xstats_taskwait_end(){
+	struct gomp_thread *thr = gomp_thread();
+	struct xstats_data *xd = &thr->xd;
+	// unsigned long now = __rdtsc();
+	unsigned int aux;
+	unsigned long now = __rdtscp(&aux);
+	unsigned long diff;
+	if(xd->thr_cc_end < now)
+		xd->thr_cc_end = now;
+	if(xd->thr_cc_pts == 0)
+		xtask_debug(0, 0, "ERROR: This should not happen.");
+	
+	diff = now - xd->thr_cc_pts;
+	xd->thr_cc_taskwait += diff;
+	xd->thr_cc_pts = now;
+}
+
+inline void xstats_barrier_start(){
+	struct gomp_thread *thr = gomp_thread();
+	struct xstats_data *xd = &thr->xd;
+	// unsigned long now = __rdtsc();
+	unsigned int aux;
+	unsigned long now = __rdtscp(&aux);
+	if(xd->thr_cc_end < now)
+		xd->thr_cc_end = now;
+	if(xd->thr_cc_pts == 0)
+		xtask_debug(0, 0, "ERROR: This should not happen.");
+	xd->thr_cc_pts = now;
+}
+
+inline void xstats_barrier_end(){
+	struct gomp_thread *thr = gomp_thread();
+	struct xstats_data *xd = &thr->xd;
+	// unsigned long now = __rdtsc();
+	unsigned int aux;
+	unsigned long now = __rdtscp(&aux);
+	unsigned long diff;
+	if(xd->thr_cc_end < now)
+		xd->thr_cc_end = now;
+	if(xd->thr_cc_pts == 0)
+		xtask_debug(0, 0, "ERROR: This should not happen.");
+	
+	diff = now - xd->thr_cc_pts;
+	xd->thr_cc_barrier += diff;
+	// xd->thr_cc_pts = now;
+}
 inline void xstats_summary(int level){
 	struct gomp_thread *thr = gomp_thread();
 	struct gomp_team *team = thr->ts.team;
@@ -321,11 +544,24 @@ inline void xstats_summary(int level){
 	struct xstats_data *xd;
 	for(int i = 0; i < team->nthreads; i++){
 		total_task_count += thr->thread_pool->threads[i]->xd.thr_task_executed;
-		total_idle_index += thr->thread_pool->threads[i]->xd.thr_idx_idle;
+		total_idle_index += thr->thread_pool->threads[i]->xd.thr_stall_count;
 	}
-	
-	xtask_prof(10, 0, "Total task count: %ld.", total_task_count);
-	xtask_prof(10, 0, "Total idle index: %ld.", total_idle_index);
+	// global stats summary
+	// 1. total tasks executed
+	// 2. total tasks generated
+	// thread specific stats
+	// 1. task executed
+	// 2. task generated
+	// 3. t(runtime + task) - when task found
+	//      - t(runtime)
+	//        - t(GOMP_task)[x]
+	//        - t(remove_task when found)
+	//		- t(task)
+	// 4. t(stall) - when no tasks found
+	//      - when no task found, util task found or start executed, or end
+	//		- t(GOMP_taskwait)
+	//      - t(xtask_barrier_handle_tasks)
+	xtask_prof(0, 0, "Total task count: %ld.", total_task_count);
 	if(level >= 1)
 		for(int i = 0; i < team->nthreads; i ++){
 				
@@ -335,16 +571,45 @@ inline void xstats_summary(int level){
 				gomp_debug(0, "Thread %d: task_executed=%ld, idx_idle=%ld, cc=%ld, idle_cc=%ld, task_max=%ld, task_min=%ld, task_avg=%ld," 
 				"idle_max=%ld, idle_min=%ld, cc_start=%ld, cc_end=%ld\n",
 				i,
-				xd->thr_task_executed, xd->thr_idx_idle, xd->thr_cc_task_total,
+				xd->thr_task_executed, xd->thr_stall_count, xd->thr_cc_task_total,
 				xd->thr_cc_idle_total, xd->thr_cc_task_max, xd->thr_cc_task_min,
 				xd->thr_cc_task_total / xd->thr_task_executed, xd->thr_cc_idle_max,
 				xd->thr_cc_idle_min,
 				xd->thr_cc_start, xd->thr_cc_end);
 				if(level == 2){
-					double thr_util_lb = (double)(100 * ((double)xd->thr_cc_task_total / (xd->thr_cc_end - xd->thr_cc_start)));
+					unsigned long cc_duration = xd->thr_cc_end - xd->thr_cc_start;
+					// double thr_util_lb = (double)(100 * ((double)xd->thr_cc_task_total / (xd->thr_cc_end - xd->thr_cc_start)));
 					double task_avg = (double)(100 * ((double)xd->thr_task_executed / total_task_count));
 					double stall = (double) (100 * ((double)xd->thr_cc_stall / (xd->thr_cc_end - xd->thr_cc_start)));
-					gomp_debug(0, "Thread %d: Workshare=%.2f%%, Thread Utilization=%.2f%%, Thread stall: %.2f%%\n", i,  task_avg, thr_util_lb, stall);
+					double generated_task_avg = (double)(100 * ((double)xd->thr_task_generated / total_task_count));
+					double new_task_cc = (double)(100 * ((double)xd->thr_cc_new_task / (xd->thr_cc_end - xd->thr_cc_start)));
+					double team_task_count_avg = (double)((double)xd->team_task_count_snapshot_acc / xd->thr_stall_count);
+					double max_stall = (double)(100 * ((double)xd->thr_cc_stall_max / cc_duration));
+					double tasking_time = (double)(100 * ((double) (xd->thr_cc_end - xd->thr_cc_tasking_start) / cc_duration));
+					double xq_ops_time = (double)(100 * ((double) xd->thr_cc_xq_ops / cc_duration));
+					double taskwait_time = (double)(100 * ((double) xd->thr_cc_taskwait / cc_duration));
+					double barrier_time = (double)(100 * ((double) xd->thr_cc_barrier / cc_duration));
+					gomp_debug(0, "Thread %d: Executed=(%ld)%.2f%%, Generated=(%ld)%.2f%%, "
+					"TaskingTime=%.2f%%, "
+					"GOMP_task=%.2f%%, "
+					"XQ_Ops=%.2f%%, "
+					"Taskwait=%.2f%%, "
+					"Barrier=(%ld)%.2f%%, "
+					"ThreadStall=%.2f%%, "
+					"MaxStall=(%ld)%.2f%%, "
+					"TeamTaskCountAverageWhenStall=%.2f, %ld, %ld"
+					".\n"
+					, i, 
+					xd->thr_task_executed, task_avg,
+					xd->thr_task_generated, generated_task_avg,
+					tasking_time, // TaskingTime
+					new_task_cc, // GOMP_task
+					xq_ops_time, // XQ_Ops
+					taskwait_time, // Taskwait
+					xd->thr_cc_barrier ,barrier_time, // Barrier
+					stall, // ThreadStall
+					xd->thr_cc_stall_max, max_stall, // MaxStall
+					team_task_count_avg, xd->team_task_count_snapshot_max, xd->team_task_count_snapshot_cutoff_count);
 				}
 		
 		}
@@ -647,6 +912,10 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 	   long arg_size, long arg_align, bool if_clause, unsigned flags,
 	   void **depend, int priority_arg, void *detach)
 {
+#ifdef XTASK_ENABLE_PROF
+  xstats_tasking_start();
+  xstats_new_task_start();
+#endif
   struct gomp_thread *thr = gomp_thread ();
   struct gomp_team *team = thr->ts.team;
   int priority = 0;
@@ -885,14 +1154,20 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 	if(use_xq){
 		GOMP_ATOMIC_INC(&task->parent->td_incomplete_child_tasks);
 		GOMP_ATOMIC_INC(&team->xtask_count);
+#ifdef XTASK_ENABLE_PROF
+	xstats_new_task_end(1);
+#endif
 	if(gomp_push_task (task) == TASK_NOT_PUSHED){
+		xstats_new_task_start();
 		// execute it right away
 		GOMP_ATOMIC_DEC(&task->parent->td_incomplete_child_tasks);
 		task->kind = GOMP_TASK_TIED;
 		thr->task = task;
+	
 
 		// xstats profiler
 		#ifdef XTASK_ENABLE_PROF
+		xstats_new_task_end(0);
 		xstats_task_start();
 		#endif
 
@@ -907,6 +1182,7 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 		#endif
 
 		GOMP_ATOMIC_DEC(&team->xtask_count);
+		xstats_new_task_end(0);
 		return;
 	}
 	}else{ //!xq - begin
@@ -1734,6 +2010,10 @@ gomp_task_run_post_remove_taskgroup (struct gomp_task *child_task)
 
 #ifdef GOMP_USE_XQUEUE
 void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
+#ifdef XTASK_ENABLE_PROF
+	xstats_tasking_start();
+	xstats_barrier_start();
+#endif
 	struct gomp_thread *thr = gomp_thread ();
 	struct gomp_team *team = thr->ts.team;
 	struct gomp_task *task = thr->task;
@@ -1753,15 +2033,18 @@ void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
 
 bool cancelled = false;
 	while(GOMP_ATOMIC_LD_ACQ(&team->xtask_count)!=0 || GOMP_ATOMIC_LD_ACQ(&thr->task->td_incomplete_child_tasks)!=0){
-		
 		cancelled = false;
 		if(use_own_tasks){
+			xstats_barrier_end();
 			child_task = gomp_remove_my_task();
+			xstats_barrier_start();
 		}
 
 		if((child_task == NULL) && (thr->num_queues > 1)){
 			use_own_tasks = 0;
+			xstats_barrier_end();
 			child_task = gomp_remove_aux_task(&last_qid);
+			xstats_barrier_start();
 		}
 
 		//bogus for victim
@@ -1792,22 +2075,20 @@ bool cancelled = false;
 			else{
 				#ifdef XTASK_ENABLE_PROF
 				// Note: The closure of a start and an end doesn't represent the execution time of the task, it only register a task start event for the thread
+				xstats_barrier_end();
 				xstats_task_start();
 				#endif
 				child_task->fn (child_task->fn_data);
 				#ifdef XTASK_ENABLE_PROF
 				// This register an end timestamp for this thread
 				xstats_task_end();
-				// thr->xd.thr_task_executed++;
+				xstats_barrier_start();
 				#endif
 			}
 				
 			thr->task = task;
 		}else 
 			continue;
-		
-
-
 
 		if(!use_own_tasks && thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_head] != NULL){
 			use_own_tasks = 1;
@@ -1832,6 +2113,7 @@ bool cancelled = false;
 		}
 	}
 	gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): EXIT!!\n", omp_get_thread_num());
+	xstats_barrier_end();
 }
 #endif
 
@@ -1984,6 +2266,10 @@ gomp_barrier_handle_tasks (gomp_barrier_state_t state)
 void
 GOMP_taskwait (void)
 {
+#if defined(GOMP_USE_XQUEUE) && defined(XTASK_ENABLE_PROF)
+  xstats_tasking_start();
+  xstats_taskwait_start();
+#endif
   struct gomp_thread *thr = gomp_thread ();
   struct gomp_team *team = thr->ts.team;
   struct gomp_task *task = thr->task;
@@ -2000,14 +2286,18 @@ GOMP_taskwait (void)
      GOMP_taskwait.  */
 #ifdef GOMP_USE_XQUEUE
 	if(__builtin_expect(thr->use_xq, 1)){
-		if (task == NULL)
+		if (task == NULL){
+			xstats_taskwait_end();
 			return;
+		}
+			
 	}
 	else
 #endif
   if (task == NULL
       || priority_queue_empty_p (&task->children_queue, MEMMODEL_ACQUIRE))
     return;
+
 
   memset (&taskwait, 0, sizeof (taskwait));
   bool child_q = false;
@@ -2031,12 +2321,16 @@ GOMP_taskwait (void)
 
 			next_task = NULL;
 			if(use_own_tasks){
+				xstats_taskwait_end();
 				next_task = gomp_remove_my_task();
+				xstats_taskwait_start();
 			}
 
 			if((next_task == NULL) && (thr->num_queues > 1)){
 				use_own_tasks = 0;
+				xstats_taskwait_end();
 				next_task = gomp_remove_aux_task(&last_qid);
+				xstats_taskwait_start();
 			}
 			if(next_task == NULL)
 				continue;
@@ -2087,12 +2381,14 @@ GOMP_taskwait (void)
 				else{
 					#ifdef XTASK_ENABLE_PROF
 					// Note: The closure of a start and an end doesn't represent the execution time of the task, it only register a task start event for the thread
+					xstats_taskwait_end();
 					xstats_task_start();
 					#endif
 					child_task->fn (child_task->fn_data);
 					#ifdef XTASK_ENABLE_PROF
 					// This register an end timestamp for this thread
 					xstats_task_end();
+					xstats_taskwait_start();
 					#endif
 
 				}
@@ -2137,6 +2433,7 @@ GOMP_taskwait (void)
 		task->taskwait = NULL;
 		if (destroy_taskwait)
 			gomp_sem_destroy(&taskwait.taskwait_sem);
+		xstats_taskwait_end();
 		return;
 	}else{ // taskwait - no-xq begin
 #endif
@@ -2280,6 +2577,7 @@ GOMP_taskwait (void)
     }
 #ifdef GOMP_USE_XQUEUE
 	} // taskwait - no-xq end
+	xstats_taskwait_end();
 #endif
 }
 
