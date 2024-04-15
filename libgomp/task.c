@@ -377,13 +377,6 @@ static inline void xstats_stall(){
 	if(team_task_count_snapshot < 100*thr->ts.team->nthreads)
 		xd->team_task_count_snapshot_cutoff_count++;
 
-	// if(team_task_count_snapshot > 0){
-	// 	if(xd->team_task_count_snapshot_min == 0)
-	// 		xd->team_task_count_snapshot_min = team_task_count_snapshot;
-	// 	else
-	// 		xd->team_task_count_snapshot_min = team_task_count_snapshot < xd->team_task_count_snapshot_min ? team_task_count_snapshot : xd->team_task_count_snapshot_min;
-	// }
-
 	xd->team_task_count_snapshot_acc += thr->ts.team->xtask_count;
 	if(xd->thr_cc_start <= 0 || xd->thr_cc_start > now)
 		xtask_debug(0, 0, "ERROR: This should not happen.");
@@ -582,7 +575,7 @@ inline void xstats_summary(int level){
 					double task_avg = (double)(100 * ((double)xd->thr_task_executed / total_task_count));
 					double stall = (double) (100 * ((double)xd->thr_cc_stall / (xd->thr_cc_end - xd->thr_cc_start)));
 					double generated_task_avg = (double)(100 * ((double)xd->thr_task_generated / total_task_count));
-					double new_task_cc = (double)(100 * ((double)xd->thr_cc_new_task / (xd->thr_cc_end - xd->thr_cc_start)));
+					double new_task_time = (double)(100 * ((double)xd->thr_cc_new_task / (xd->thr_cc_end - xd->thr_cc_start)));
 					double team_task_count_avg = (double)((double)xd->team_task_count_snapshot_acc / xd->thr_stall_count);
 					double max_stall = (double)(100 * ((double)xd->thr_cc_stall_max / cc_duration));
 					double tasking_time = (double)(100 * ((double) (xd->thr_cc_end - xd->thr_cc_tasking_start) / cc_duration));
@@ -590,26 +583,32 @@ inline void xstats_summary(int level){
 					double taskwait_time = (double)(100 * ((double) xd->thr_cc_taskwait / cc_duration));
 					double barrier_time = (double)(100 * ((double) xd->thr_cc_barrier / cc_duration));
 					gomp_debug(0, "Thread %d: Executed=(%ld)%.2f%%, Generated=(%ld)%.2f%%, "
-					"TaskingTime=%.2f%%, "
-					"GOMP_task=%.2f%%, "
-					"XQ_Ops=%.2f%%, "
-					"Taskwait=%.2f%%, "
+					"TaskingTime=(%ld)%.2f%%, "
+					"GOMP_task=(%ld)%.2f%%, "
+					"XQ_Ops=(%ld)%.2f%%, "
+					"Taskwait=(%ld)%.2f%%, "
 					"Barrier=(%ld)%.2f%%, "
-					"ThreadStall=%.2f%%, "
+					"ThreadStall=(%ld)%.2f%%, "
 					"MaxStall=(%ld)%.2f%%, "
-					"TeamTaskCountAverageWhenStall=%.2f, %ld, %ld"
+					"TeamTaskCountAverageWhenStall=%.2f, "
+					"MaxTeamTaskCount=%ld, "
+					"StallCount=%ld, "
+					"StallCountWhenBelowCutOff=%ld"
 					".\n"
 					, i, 
 					xd->thr_task_executed, task_avg,
 					xd->thr_task_generated, generated_task_avg,
-					tasking_time, // TaskingTime
-					new_task_cc, // GOMP_task
-					xq_ops_time, // XQ_Ops
-					taskwait_time, // Taskwait
+					(xd->thr_cc_end - xd->thr_cc_tasking_start) ,tasking_time, // TaskingTime
+					xd->thr_cc_new_task, new_task_time, // GOMP_task
+					xd->thr_cc_xq_ops, xq_ops_time, // XQ_Ops
+					xd->thr_cc_taskwait, taskwait_time, // Taskwait
 					xd->thr_cc_barrier ,barrier_time, // Barrier
-					stall, // ThreadStall
+					xd->thr_cc_stall, stall, // ThreadStall
 					xd->thr_cc_stall_max, max_stall, // MaxStall
-					team_task_count_avg, xd->team_task_count_snapshot_max, xd->team_task_count_snapshot_cutoff_count);
+					team_task_count_avg, 
+					xd->team_task_count_snapshot_max, 
+					xd->thr_stall_count,
+					xd->team_task_count_snapshot_cutoff_count);
 				}
 		
 		}
