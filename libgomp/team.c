@@ -111,6 +111,7 @@ gomp_thread_start (void *xdata)
 	thr->use_xq = data->use_xq;
 	if(thr->use_xq && thr->td_task_q == NULL)
 	  	gomp_alloc_task_q(thr);
+	// xtask_debug(0, 0, "thread started");
 #ifdef XTASK_ENABLE_PROF
 	xstats_init();
 #endif 
@@ -135,7 +136,7 @@ gomp_thread_start (void *xdata)
 
       gomp_simple_barrier_wait (&pool->threads_dock);
 	  #ifdef GOMP_USE_XQUEUE
-	  xflag_init();
+	  xflag_init(thr);
 	  #endif
       do
 	{
@@ -143,9 +144,11 @@ gomp_thread_start (void *xdata)
 	  struct gomp_task *task = thr->task;
 
 	  local_fn (local_data);
+
 	  gomp_team_barrier_wait_final (&team->barrier);
 	  gomp_finish_task (task);
-
+	//   xtask_debug(0, 0, "thread finished task");
+	//   xtask_debug(0, 0, "before simple barrier wait.");
 	  gomp_simple_barrier_wait (&pool->threads_dock);
 
 	  local_fn = thr->fn;
@@ -366,7 +369,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 #ifdef GOMP_USE_XQUEUE
 	// team->use_xq = true; // default to true
 	thr->use_xq = flags & 32;
-	xtask_debug(0, 0, "XTASK v.1.4, gomp_team_start!, use_xq=%d\n", thr->use_xq);
+	xtask_debug(0, 0, "XTASK v.1.4, gomp_team_start!, use_xq=%d, nested=%d, level=%d\n", thr->use_xq, nested, thr->ts.level);
   	gomp_num_task_queues = nthreads;
   	gomp_alloc_task_q(thr);
 #endif
@@ -608,7 +611,6 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 		  if (affinity_thr == NULL)
 		    {
 		      unsigned int j;
-
 		      if (team->prev_ts.place_partition_len > 64)
 			affinity_thr
 			  = gomp_malloc (team->prev_ts.place_partition_len
@@ -695,6 +697,9 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	  nthr->fn = fn;
 	  nthr->data = data;
 	  team->ordered_release[i] = &nthr->release;
+	  #ifdef GOMP_USE_XQUEUE
+	//   xflag_init(nthr);
+	  #endif
 	}
 
       if (__builtin_expect (affinity_thr != NULL, 0))
@@ -754,7 +759,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 					    nthreads + affinity_count);
 	    }
 	}
-
+		// xtask_debug(0, 0, "reuse, i=%d", i);
       if (i == nthreads)
 	goto do_release;
 
@@ -912,7 +917,10 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
     gomp_simple_barrier_wait (&pool->threads_dock);
 
 #ifdef GOMP_USE_XQUEUE
-	xflag_init();
+/**
+ * This will go straigt to parellel end, where the team bar and simple bar is spining
+*/
+	xflag_init(thr);
 #endif
 
   /* Decrease the barrier threshold to match the number of threads

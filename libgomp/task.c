@@ -255,15 +255,16 @@ gomp_remove_aux_task(unsigned long *last_qid){
 /*
 This has to be called after thread_dock, before the tasks
 */
-void xflag_init(){
-	struct gomp_thread *thr = gomp_thread();
+void xflag_init(struct gomp_thread *thr){
+	
 	struct xflag *flag = &thr->xflag;
 	flag->thr = thr;
 	int tid = thr->ts.team_id;
 	flag->state = XFLAG_STATE_RUNNING;
-	flag->gathered = false;
+	flag->gathered = 0;
 	flag->on_release = false;
 	flag->parent = tid == 0 ? NULL : &thr->thread_pool->threads[(tid-1)/2]->xflag;
+	flag->nchild = 0;
 	for(int i = 0; i < XFLAG_TREE_DEGREE; i++){
 		int child_tid = tid * 2 + i + 1;
 		if(child_tid < thr->ts.team->nthreads){
@@ -274,15 +275,36 @@ void xflag_init(){
 		}
 		GOMP_ATOMIC_ST_REL(&flag->child_done[i], 0);
 	}
+
+	// xtask_debug(0, 0, "xflag_init, tid=%d, gathered=%d, nchild=%d", tid, flag->gathered, flag->nchild);
 	flag->cidx = !(tid & 1);
+}
+
+void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs){
+	struct xflag *flag = &thr->xflag;
+	flag->state = XFLAG_STATE_RUNNING;
+	flag->gathered = bs;
+	// GOMP_ATOMIC_ST_REL(&flag->on_release, false);
+	flag->on_release = false;
+	if(flag->parent && flag->thr->ts.team_id != 0){
+		GOMP_ATOMIC_ST_REL(&flag->parent->child_done[flag->cidx], 0);
+	}
+	// for(int i = 0; i < flag->nchild; i++){
+	// 	GOMP_ATOMIC_ST_REL(&flag->child_done[i], 0);
+	// }
 }
 
 /*
 This can only be called by the root
 */
 static void xflag_release(struct xflag *flag){
+	// if(flag->thr->ts.team_id == 0)
+	// 	xtask_debug(0, 0, "releasing");
 	// assert(flag->thr->ts.team_id == 0);
+	// GOMP_ATOMIC_ST_REL(&flag->on_release, true);
+	// bool before = flag->on_release;
 	flag->on_release = true;
+	// xtask_debug(0, 0, "before=%d, on_release=%d", before, flag->on_release);
 	for(int i = 0; i < flag->nchild; i++){
 		xflag_release(flag->child[i]);
 	}
@@ -296,28 +318,39 @@ of different thread.
 The last thread entering the bar do a broadcast to all the other threads, setting the flag gathered to true
 the val root has to be carefully set by thread, in case it is the root, it has to be true
 */
-static void xflag_gathered(struct xflag *flag, bool root){
+static void xflag_gathered(struct xflag *flag, bool root, gomp_barrier_state_t bs){
+	bs = bs & ~BAR_WAS_LAST;
+	// xtask_debug(0, 0, "bs=%d, gathered=%d", bs, flag->gathered);
 	if(root){
-		// xtask_debug(0, 0, "tid: %d, nchild=%d, flag=%p, parent=(%d)%p", 
+		// xtask_debug(0, 0, "tid: %d, nchild=%d, flag=%p, parent=(%d)%p, gathered=%d, on_release=%d", 
 		// flag->thr->ts.team_id, 
 		// flag->nchild,
 		// flag,
 		// flag->parent ? flag->parent->thr->ts.team_id : 0,
-		// flag->parent
+		// flag->parent,
+		// flag->gathered,
+		// flag->on_release
 		// );
-		flag->gathered = true;
+		flag->gathered = bs + BAR_INCR;
 		for(int i = 0; i < flag->nchild; i++){
-			xflag_gathered(flag->child[i], true);
+			xflag_gathered(flag->child[i], true, bs);
 		}
 	}else{
-		xflag_gathered(flag->parent, flag->parent->thr->ts.team_id == 0);
+		xflag_gathered(flag->parent, flag->parent->thr->ts.team_id == 0, bs);
 	}
 }
 
 long long counter = 0;
 
-static void xflag_done(struct xflag * flag){
-	if(!flag->gathered)
+static void xflag_done(struct xflag * flag, gomp_barrier_state_t bs){
+	bs = bs & ~BAR_WAS_LAST;
+	/**
+	 * gathered flag is only set when xflag_gathered is called,
+	 * and xflag_gathered is called only when the last thread enters the barrier with current bar's state
+	 * before gathered, the gathered should be state
+	 * after gathered, the gathered should be state + BAR_INCR, so we should wait for current generation
+	*/
+	if(flag->gathered!= bs + BAR_INCR)
 		return;
 	if(flag->state == XFLAG_STATE_DONE)
 		return;
@@ -2126,11 +2159,12 @@ void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
 	gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): barrier_waiting=%d,"
 	" xtask_count=%ld, generation=%d. \n", 
 	omp_get_thread_num(), gomp_team_barrier_waiting_for_tasks (&team->barrier), team->xtask_count, team->barrier.generation);
-		if(gomp_barrier_last_thread(state)){
-			xflag_gathered(&thr->xflag, thr->ts.team_id == 0);
-			gomp_team_barrier_done(&team->barrier, state);
+	if(gomp_barrier_last_thread(state)){
+			// gomp_team_barrier_done(&team->barrier, state);
+			xtask_debug(0, 0, "gather");
+			xflag_gathered(&thr->xflag, thr->ts.team_id == 0, state);
 			gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): LAST THREAD, generation=%d\n", omp_get_thread_num(), team->barrier.generation);
-		}
+	}
 
 bool cancelled = false;
 while(1){
@@ -2227,9 +2261,11 @@ while(1){
 	}
 	
 	// task source has been depeleted, set this thread's done, let the parent thread know
-	xflag_done(&thr->xflag);
-	if(thr->xflag.on_release)
+	xflag_done(&thr->xflag, state);
+	if(thr->xflag.on_release){
 		return;
+	}
+		
 }
 	gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): EXIT!!\n", omp_get_thread_num());
 	#ifdef XTASK_ENABLE_PROF

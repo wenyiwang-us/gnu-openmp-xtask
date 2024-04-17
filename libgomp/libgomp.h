@@ -831,7 +831,7 @@ struct xflag{
   int cidx; // child index in parent
   enum xbar_state state;
   volatile bool on_release;
-  volatile bool gathered;
+  volatile int gathered;
 }
 __attribute__((aligned(64)));
 
@@ -1150,7 +1150,8 @@ gomp_finish_task (struct gomp_task *task)
 extern void gomp_alloc_task_q(struct gomp_thread *thr);
 extern void xtask_barrier_handle_tasks (gomp_barrier_state_t);
 extern long get_task_count();
-extern void xflag_init();
+extern void xflag_init(struct gomp_thread *thr);
+extern void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs);
 // extern void xflag_build_tree(struct xflag *, int, int);
 // extern void xflag_optimize_tree(struct xflag *);
 #ifdef XTASK_ENABLE_PROF

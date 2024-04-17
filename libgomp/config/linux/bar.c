@@ -34,6 +34,7 @@
 void
 gomp_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
 {
+  // xtask_debug(0, 1, "state = %d.", state);
   if (__builtin_expect (state & BAR_WAS_LAST, 0))
     {
       /* Next time we'll be awaiting TOTAL threads again.  */
@@ -103,44 +104,111 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
    * 
   */
   struct gomp_thread *thr = gomp_thread();
+  bool released = false;
   if(__builtin_expect(thr->use_xq, 1)){
     // xtask_debug(0, 2, "state=%d\n", state);
+    /**
+     * reset the awaited count to total, this is guaranteed to happen before last thread calling gathered.
+     * last thread is gathered without the knowledge that the awaited count has been reset.
+    */
+    if(state & BAR_WAS_LAST){
+      // xtask_debug(0, 0, "last bar gather.");
+      __atomic_store_n(&bar->awaited, bar->total, MEMMODEL_RELEASE);
+    }
+    gomp_barrier_state_t t; 
     while(1){
-      // if(state & BAR_WAS_LAST){
-      //   xtask_debug(0, 0, "looping last bar, state=%d", state);
-      // }
       #ifdef XTASK_ENABLE_PROF
       xstats_barrier_end();
       #endif
-      xtask_barrier_handle_tasks(state); // should return only when task resource has been depleted
-      // gomp_debug(100, "[tid=%d] <barrier-wait-end>: generation=%d, state=%d, state+BAR_INCR=%d\n", omp_get_thread_num(), bar->generation, state, state+BAR_INCR);
-      #ifdef XTASK_ENABLE_PROF
-      xstats_barrier_start();
-      #endif
-      gen = __atomic_load_n(&bar->generation, MEMMODEL_ACQUIRE);
-      if(__builtin_expect(gen == state + BAR_INCR, 0)){
-        #ifdef XTASK_ENABLE_PROF
-        xstats_barrier_end();
-        #endif
-        return;
-      }
-      if(__builtin_expect(state & BAR_WAS_LAST, 0)){
+      /**
+       * xtask_barrier_handle_tasks returns only when all the condition meets:
+       * 1. All threads have arrived at the barrier by calling gomp_team_barrier_wait, gomp_barrier_wait_start or gomp_team_barrier_wait_final once each
+       * 2. Task queue is empty at the point of checking
+       * 3. thr's task has no dependencies
+       * 4. Then, the above condition will initiate the barrier releasing process.
+       * Once thr detects it is released, it will return from this function.
+      */
+
+      xtask_barrier_handle_tasks(state); 
+      /**
+       * The threads has been released, and the first comer will see a full awaited count,
+       * gathered and on_release has been set to true, reset them once
+       * release flag make sure the state is only updated once inside the loop.
+       * Note now the state is different than the one passed in
+      */
+     
+     if(!released){
+      // if(state & BAR_WAS_LAST){
         // xtask_debug(0, 0, "last bar");
-        bar->awaited = bar->total;
+      state &= ~BAR_WAS_LAST;
+      t = gomp_barrier_wait_start(bar);
+      released = true;
+      // int awaited = __atomic_load_n(&bar->awaited, MEMMODEL_ACQUIRE);
+      // if(!(t & BAR_WAS_LAST))
+      //   xtask_debug(0, 0, "bar-release, state=%d, t=%d, awaited=%d", state, t, awaited);
+     }
+
+      gen = __atomic_load_n(&bar->generation, MEMMODEL_ACQUIRE);
+      // xtask_debug(0, 0, "bar's gen=%d, state=%d", gen, state);
+      if(__builtin_expect(gen == state + BAR_INCR, 0)){
+        // xtask_debug(0, 0, "bar exits, gen=%d, state=%d, total=%d", gen, state, bar->total);
+        break;
+      }
+
+      if(__builtin_expect(t & BAR_WAS_LAST, 0)){
+        // or this atomic can be replaced with a simple assignmet?
         state &= ~BAR_CANCELLED;
-        state += BAR_INCR - BAR_WAS_LAST;
-        __atomic_store_n(&bar->generation, state, MEMMODEL_RELEASE);
-        // futex_wake((int *)&bar->generation, INT_MAX);
-        // xtask_debug(20, 2, "exits gomp_team_barrier_wait_end.");
-        #ifdef XTASK_ENABLE_PROF
-        xstats_barrier_end();
-        #endif
-        return;
+        // state += BAR_INCR;
+        // bar->awaited = bar->total;
+        __atomic_store_n(&bar->awaited, bar->total, MEMMODEL_RELEASE);
+        __atomic_store_n(&bar->generation, state + BAR_INCR, MEMMODEL_RELEASE);
+        // gen = __atomic_load_n(&bar->generation, MEMMODEL_ACQUIRE);
+        // xtask_debug(0, 0, "last bar exits, state=%d, gen=%d, total=%d", state, gen, bar->total);
+        break;
+      }
+
       
-    }
+  
+
+
+    //   #ifdef XTASK_ENABLE_PROF
+    //   xstats_barrier_start();
+    //   #endif
+    //   gen = __atomic_load_n(&bar->generation, MEMMODEL_ACQUIRE);
+    //   if(__builtin_expect(gen == state + BAR_INCR, 0)){
+    //     #ifdef XTASK_ENABLE_PROF
+    //     xstats_barrier_end();
+    //     #endif
+    //     xtask_debug(0, 0, "bar exits, gen=%d, state=%d, total=%d", gen, state, bar->total);
+    //     break;
+    //   }
+    //   if(__builtin_expect(state & BAR_WAS_LAST, 0)){
+    //     // this should be set by the actual last barrier exiting the thread, not the last one
+    //     // with barrier_start.
+    //     // xtask_debug(0, 0, "last bar");
+    //     // bar->awaited = bar->total;
+    //     state &= ~BAR_CANCELLED;
+    //     state += BAR_INCR - BAR_WAS_LAST;
+    //     __atomic_store_n(&bar->awaited, bar->total, MEMMODEL_RELEASE);
+    //     __atomic_store_n(&bar->generation, state, MEMMODEL_RELEASE);
+    //     // futex_wake((int *)&bar->generation, INT_MAX);
+    //     // xtask_debug(20, 2, "exits gomp_team_barrier_wait_end.");
+    //     #ifdef XTASK_ENABLE_PROF
+    //     xstats_barrier_end();
+    //     #endif
+    //     xtask_debug(0, 0, "last bar exits. state=%d, gen=%d, total=%d", state, gen, bar->total);
+    //     break;
+    // }
     // xtask_debug(0, 2, "bar spining gomp_team_barrier_wait_end. gen=%d, state=%d\n", gen, state);
-      // state &= ~BAR_CANCELLED;
+      state &= ~BAR_CANCELLED;
     }
+    xflag_reinit(thr, state);
+    // xtask_debug(0, 0, "team bar exits.");
+    
+    // if(last)
+    //   xtask_debug(0, 0, "team bar exits. state=%d, gen=%d", state, gen);
+    //   else
+    //   xtask_debug(0, 0, "team bar exits. state=%d, gen=%d", state, gen);
   // xtask_debug(0, 2, "exits gomp_team_barrier_wait_end.");
   #ifdef XTASK_ENABLE_PROF
   xstats_barrier_end();

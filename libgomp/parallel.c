@@ -172,6 +172,7 @@ void
 GOMP_parallel (void (*fn) (void *), void *data, unsigned num_threads,
 	       unsigned int flags)
 {
+  xtask_debug(0, 0, "parellel.\n\n\n");
   num_threads = gomp_resolve_num_threads (num_threads, 0);
   gomp_team_start (fn, data, num_threads, flags, gomp_new_team (num_threads),
 		   NULL);
