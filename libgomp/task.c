@@ -2161,9 +2161,9 @@ void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
 	omp_get_thread_num(), gomp_team_barrier_waiting_for_tasks (&team->barrier), team->xtask_count, team->barrier.generation);
 	if(gomp_barrier_last_thread(state)){
 			// gomp_team_barrier_done(&team->barrier, state);
-			xtask_debug(0, 0, "gather");
+			// xtask_debug(0, 0, "gather");
 			xflag_gathered(&thr->xflag, thr->ts.team_id == 0, state);
-			gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): LAST THREAD, generation=%d\n", omp_get_thread_num(), team->barrier.generation);
+			// gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): LAST THREAD, generation=%d\n", omp_get_thread_num(), team->barrier.generation);
 	}
 
 bool cancelled = false;
