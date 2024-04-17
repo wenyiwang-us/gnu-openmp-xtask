@@ -73,7 +73,7 @@
 # pragma GCC visibility push(hidden)
 #endif
 #define GOMP_USE_XQUEUE 1
-#define XTASK_ENABLE_PROF 1 // xtask enable profiling
+// #define XTASK_ENABLE_PROF 1 // xtask enable profiling
 
 #if defined(GOMP_USE_XQUEUE) && defined(XTASK_ENABLE_PROF)
 #include <x86intrin.h>
@@ -603,6 +603,10 @@ typedef struct gomp_task gomp_task_t;
 // c first do the operations then return
 #define GOMP_ATOMIC_INC(PTR) __atomic_add_fetch (PTR, 1, __ATOMIC_ACQ_REL)
 #define GOMP_ATOMIC_DEC(PTR) __atomic_sub_fetch (PTR, 1, __ATOMIC_ACQ_REL)
+// #define GOMP_ATOMIC_LD_ACQ(PTR) __atomic_load_n (PTR, __ATOMIC_SEQ_CST)
+// #define GOMP_ATOMIC_INC(PTR) __atomic_add_fetch (PTR, 1, __ATOMIC_SEQ_CST)
+// #define GOMP_ATOMIC_DEC(PTR) __atomic_sub_fetch (PTR, 1, __ATOMIC_SEQ_CST)
+
 #define GOMP_ATOMIC_ADD(PTR, VAL) __atomic_add_fetch (PTR, VAL, __ATOMIC_ACQ_REL)
 #define GOMP_ATOMIC_SUB(PTR, VAL) __atomic_sub_fetch (PTR, VAL, __ATOMIC_ACQ_REL)
 #endif
@@ -811,6 +815,27 @@ struct gomp_taskq{
   unsigned int td_deque_tail; // tail of the queue
 };
 
+/* This structure is used for tree barreir sync, and detect barrier termination*/
+#define XFLAG_TREE_DEGREE 2
+enum xbar_state{
+  XFLAG_STATE_RUNNING,
+  XFLAG_STATE_DONE
+};
+
+struct xflag{
+  struct gomp_thread *thr;
+  int nchild;
+  struct xflag *parent;
+  struct xflag *child[XFLAG_TREE_DEGREE];
+  volatile unsigned long child_done[XFLAG_TREE_DEGREE];
+  int cidx; // child index in parent
+  enum xbar_state state;
+  volatile bool on_release;
+  volatile bool gathered;
+}
+__attribute__((aligned(64)));
+
+
 #ifdef XTASK_ENABLE_PROF
 struct xstats_data // xtask stats data
 {
@@ -881,6 +906,7 @@ struct gomp_thread
   unsigned long tl_task_count; // thread local task count
   unsigned long tl_task_queued_count;
   bool use_xq; // use xq or not, default is yes, when incompat clauses appeared, will use default GNU tasking implementation
+  struct xflag xflag;
 #ifdef XTASK_ENABLE_PROF
   struct xstats_data xd;
 #endif
@@ -1124,6 +1150,9 @@ gomp_finish_task (struct gomp_task *task)
 extern void gomp_alloc_task_q(struct gomp_thread *thr);
 extern void xtask_barrier_handle_tasks (gomp_barrier_state_t);
 extern long get_task_count();
+extern void xflag_init();
+// extern void xflag_build_tree(struct xflag *, int, int);
+// extern void xflag_optimize_tree(struct xflag *);
 #ifdef XTASK_ENABLE_PROF
 
 #endif

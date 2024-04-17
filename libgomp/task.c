@@ -248,11 +248,110 @@ gomp_remove_aux_task(unsigned long *last_qid){
 		#endif
 		return NULL;
 	}
-		
-
-	
 	return task;
 };
+
+
+/*
+This has to be called after thread_dock, before the tasks
+*/
+void xflag_init(){
+	struct gomp_thread *thr = gomp_thread();
+	struct xflag *flag = &thr->xflag;
+	flag->thr = thr;
+	int tid = thr->ts.team_id;
+	flag->state = XFLAG_STATE_RUNNING;
+	flag->gathered = false;
+	flag->on_release = false;
+	flag->parent = tid == 0 ? NULL : &thr->thread_pool->threads[(tid-1)/2]->xflag;
+	for(int i = 0; i < XFLAG_TREE_DEGREE; i++){
+		int child_tid = tid * 2 + i + 1;
+		if(child_tid < thr->ts.team->nthreads){
+			flag->child[i] = &thr->thread_pool->threads[child_tid]->xflag;		
+			flag->nchild++;
+		}else{
+			flag->child[i] = NULL;
+		}
+		GOMP_ATOMIC_ST_REL(&flag->child_done[i], 0);
+	}
+	flag->cidx = !(tid & 1);
+}
+
+/*
+This can only be called by the root
+*/
+static void xflag_release(struct xflag *flag){
+	// assert(flag->thr->ts.team_id == 0);
+	flag->on_release = true;
+	for(int i = 0; i < flag->nchild; i++){
+		xflag_release(flag->child[i]);
+	}
+}
+
+/* 
+xflag_gathered ensures that xflag_done can pass the first condition when the last barrier is reached,
+this is to prevent xflag_done is called before some thread don't reach the barrier, and it is possible
+that xflag_init hasn't been called by that thread, so we prevent thread from even accessing the data structure
+of different thread.
+The last thread entering the bar do a broadcast to all the other threads, setting the flag gathered to true
+the val root has to be carefully set by thread, in case it is the root, it has to be true
+*/
+static void xflag_gathered(struct xflag *flag, bool root){
+	if(root){
+		// xtask_debug(0, 0, "tid: %d, nchild=%d, flag=%p, parent=(%d)%p", 
+		// flag->thr->ts.team_id, 
+		// flag->nchild,
+		// flag,
+		// flag->parent ? flag->parent->thr->ts.team_id : 0,
+		// flag->parent
+		// );
+		flag->gathered = true;
+		for(int i = 0; i < flag->nchild; i++){
+			xflag_gathered(flag->child[i], true);
+		}
+	}else{
+		xflag_gathered(flag->parent, flag->parent->thr->ts.team_id == 0);
+	}
+}
+
+long long counter = 0;
+
+static void xflag_done(struct xflag * flag){
+	if(!flag->gathered)
+		return;
+	if(flag->state == XFLAG_STATE_DONE)
+		return;
+	bool done = true;
+	for(int i = 0; i < flag->nchild; i++)
+		done &= GOMP_ATOMIC_LD_ACQ(&flag->child_done[i]);
+	done &= !GOMP_ATOMIC_LD_ACQ(&flag->thr->task->td_incomplete_child_tasks);
+	if(flag->thr->ts.team_id == 0){
+		counter ++;
+		// if(counter % 100000 == 0)
+		// xtask_debug(0, 0, "not done, flag=%p, incomplete_child=%ld, nchild=%d, child=%ld, %ld", 
+		// flag,
+		// flag->thr->task->td_incomplete_child_tasks,
+		// flag->nchild,
+		// flag->child_done[0], flag->child_done[1]
+		// );
+	}
+	
+	if(done){
+
+		flag->state = XFLAG_STATE_DONE;
+		// if we are the root, and all the children are done, release the children
+		if(flag->thr->ts.team_id == 0){
+			xflag_release(flag);
+			return;
+		}
+		GOMP_ATOMIC_ST_REL(&flag->parent->child_done[flag->cidx], 1);
+		// xtask_debug(0, 0, "done, nchild=%d, child=%ld, %ld, cidx=%d, parent's child = %ld, %ld, parentflag=%p",
+		// flag->nchild,
+		// flag->child_done[0], flag->child_done[1], flag->cidx
+		// , flag->parent->child_done[0], flag->parent->child_done[1],
+		// flag->parent);
+	}
+}
 
 #ifdef XTASK_ENABLE_PROF
 inline void xstats_init(){
@@ -1152,14 +1251,15 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 #ifdef GOMP_USE_XQUEUE
 	if(use_xq){
 		GOMP_ATOMIC_INC(&task->parent->td_incomplete_child_tasks);
-		GOMP_ATOMIC_INC(&team->xtask_count);
-#ifdef XTASK_ENABLE_PROF
+		// GOMP_ATOMIC_INC(&team->xtask_count);
+	#ifdef XTASK_ENABLE_PROF
 	xstats_new_task_end(1);
-#endif
+	#endif
 	if(gomp_push_task (task) == TASK_NOT_PUSHED){
+		#ifdef XTASK_ENABLE_PROF
 		xstats_new_task_start();
+		#endif
 		// execute it right away
-		GOMP_ATOMIC_DEC(&task->parent->td_incomplete_child_tasks);
 		task->kind = GOMP_TASK_TIED;
 		thr->task = task;
 	
@@ -1172,16 +1272,17 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 
 		task->fn(task->fn_data);
 		thr->task = parent;
+		GOMP_ATOMIC_DEC(&task->parent->td_incomplete_child_tasks);
 		gomp_finish_task(task);
 		free(task);
 
 		// xstats profiler
 		#ifdef XTASK_ENABLE_PROF
 		xstats_task_end();
-		#endif
-
-		GOMP_ATOMIC_DEC(&team->xtask_count);
 		xstats_new_task_end(0);
+		#endif
+		// GOMP_ATOMIC_DEC(&team->xtask_count);
+		
 		return;
 	}
 	}else{ //!xq - begin
@@ -2026,26 +2127,38 @@ void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
 	" xtask_count=%ld, generation=%d. \n", 
 	omp_get_thread_num(), gomp_team_barrier_waiting_for_tasks (&team->barrier), team->xtask_count, team->barrier.generation);
 		if(gomp_barrier_last_thread(state)){
+			xflag_gathered(&thr->xflag, thr->ts.team_id == 0);
 			gomp_team_barrier_done(&team->barrier, state);
 			gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): LAST THREAD, generation=%d\n", omp_get_thread_num(), team->barrier.generation);
 		}
 
 bool cancelled = false;
-	while(GOMP_ATOMIC_LD_ACQ(&team->xtask_count)!=0 || GOMP_ATOMIC_LD_ACQ(&thr->task->td_incomplete_child_tasks)!=0){
+while(1){
+	while(1){
+	// while(GOMP_ATOMIC_LD_ACQ(&team->xtask_count)!=0 || GOMP_ATOMIC_LD_ACQ(&thr->task->td_incomplete_child_tasks)!=0){
 		cancelled = false;
 		if(use_own_tasks){
+			#ifdef XTASK_ENABLE_PROF
 			xstats_barrier_end();
+			#endif
 			child_task = gomp_remove_my_task();
+			#ifdef XTASK_ENABLE_PROF
 			xstats_barrier_start();
+			#endif
 		}
 
 		if((child_task == NULL) && (thr->num_queues > 1)){
 			use_own_tasks = 0;
+			#ifdef XTASK_ENABLE_PROF
 			xstats_barrier_end();
+			#endif
 			child_task = gomp_remove_aux_task(&last_qid);
+			#ifdef XTASK_ENABLE_PROF
 			xstats_barrier_start();
+			#endif
 		}
-
+		// if(gomp_barrier_last_thread(state))
+		// 	xtask_debug(0, 0, "thr->xflag.on_release=%d, thr->task->td_incomplete_child_tasks=%ld, child_task=%p\n", thr->xflag.on_release, thr->task->td_incomplete_child_tasks, child_task);
 		//bogus for victim
 		if(new_victim)
 			new_victim = new_victim;
@@ -2068,7 +2181,7 @@ bool cancelled = false;
 			if (__builtin_expect (child_task->fn == NULL, 0)){
 				if (gomp_target_task_fn (child_task->fn_data)){
 				gomp_debug(0, "[tid=%d] wenyi(gomp_barrier_handle_tasks): unexpected.\n", omp_get_thread_num());
-				continue;
+				break;
 				}
 				}
 			else{
@@ -2086,8 +2199,9 @@ bool cancelled = false;
 			}
 				
 			thr->task = task;
-		}else 
-			continue;
+		}else
+			break;
+			
 
 		if(!use_own_tasks && thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_head] != NULL){
 			use_own_tasks = 1;
@@ -2098,7 +2212,7 @@ bool cancelled = false;
 		{
 			GOMP_ATOMIC_DEC(&child_task->parent->td_incomplete_child_tasks);
 
-			GOMP_ATOMIC_DEC(&team->xtask_count);
+			// GOMP_ATOMIC_DEC(&team->xtask_count);
 	
 			finish_cancelled:;
 			to_free = child_task;
@@ -2111,8 +2225,16 @@ bool cancelled = false;
 			to_free = NULL;
 		}
 	}
+	
+	// task source has been depeleted, set this thread's done, let the parent thread know
+	xflag_done(&thr->xflag);
+	if(thr->xflag.on_release)
+		return;
+}
 	gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): EXIT!!\n", omp_get_thread_num());
+	#ifdef XTASK_ENABLE_PROF
 	xstats_barrier_end();
+	#endif
 }
 #endif
 
@@ -2286,7 +2408,9 @@ GOMP_taskwait (void)
 #ifdef GOMP_USE_XQUEUE
 	if(__builtin_expect(thr->use_xq, 1)){
 		if (task == NULL){
+			#ifdef XTASK_ENABLE_PROF
 			xstats_taskwait_end();
+			#endif
 			return;
 		}
 			
@@ -2308,10 +2432,9 @@ GOMP_taskwait (void)
 	gomp_task_t *next_task;
 	if(__builtin_expect(thr->use_xq, 1)){
 		// has to reimplement our own version of taskwait;
-		while(GOMP_ATOMIC_LD_ACQ(&thr->task->td_incomplete_child_tasks)!=0){
+		while(GOMP_ATOMIC_LD_ACQ(&thr->task->td_incomplete_child_tasks)){
 			// GOMP_taskwait	
 			bool cancelled = false;
-			
 			if (to_free){
 				gomp_finish_task (to_free);
 				free (to_free);
@@ -2320,16 +2443,24 @@ GOMP_taskwait (void)
 
 			next_task = NULL;
 			if(use_own_tasks){
+				#ifdef XTASK_ENABLE_PROF
 				xstats_taskwait_end();
+				#endif
 				next_task = gomp_remove_my_task();
+				#ifdef XTASK_ENABLE_PROF
 				xstats_taskwait_start();
+				#endif
 			}
 
 			if((next_task == NULL) && (thr->num_queues > 1)){
 				use_own_tasks = 0;
+				#ifdef XTASK_ENABLE_PROF
 				xstats_taskwait_end();
+				#endif
 				next_task = gomp_remove_aux_task(&last_qid);
+				#ifdef XTASK_ENABLE_PROF
 				xstats_taskwait_start();
+				#endif
 			}
 			if(next_task == NULL)
 				continue;
@@ -2392,7 +2523,7 @@ GOMP_taskwait (void)
 
 				}
 					
-				thr->task = task; // wenyi: task resumed
+				thr->task = task; // ww: task resumed
 			}else continue;
 			// gomp_sem_wait (&taskwait.taskwait_sem);
 			// ww: wait in gnu's context indicates nothing in the queue, not suitable for our purpose. NOT SURE if it only waits when there is nothing in both of the queues or if there is nothing in either queues
@@ -2420,7 +2551,7 @@ GOMP_taskwait (void)
 				}
 
 				GOMP_ATOMIC_DEC(&child_task->parent->td_incomplete_child_tasks);
-				GOMP_ATOMIC_DEC(&team->xtask_count);
+				// GOMP_ATOMIC_DEC(&team->xtask_count);
 		
 				xtask_finish_cancelled:;
 				to_free = child_task;
@@ -2432,7 +2563,9 @@ GOMP_taskwait (void)
 		task->taskwait = NULL;
 		if (destroy_taskwait)
 			gomp_sem_destroy(&taskwait.taskwait_sem);
+		#ifdef XTASK_ENABLE_PROF
 		xstats_taskwait_end();
+		#endif
 		return;
 	}else{ // taskwait - no-xq begin
 #endif
@@ -2576,7 +2709,9 @@ GOMP_taskwait (void)
     }
 #ifdef GOMP_USE_XQUEUE
 	} // taskwait - no-xq end
+	#ifdef XTASK_ENABLE_PROF
 	xstats_taskwait_end();
+	#endif
 #endif
 }
 

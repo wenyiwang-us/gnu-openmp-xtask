@@ -134,6 +134,9 @@ gomp_thread_start (void *xdata)
       pool->threads[thr->ts.team_id] = thr;
 
       gomp_simple_barrier_wait (&pool->threads_dock);
+	  #ifdef GOMP_USE_XQUEUE
+	  xflag_init();
+	  #endif
       do
 	{
 	  struct gomp_team *team = thr->ts.team;
@@ -907,6 +910,10 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
     gomp_barrier_wait (&team->barrier);
   else
     gomp_simple_barrier_wait (&pool->threads_dock);
+
+#ifdef GOMP_USE_XQUEUE
+	xflag_init();
+#endif
 
   /* Decrease the barrier threshold to match the number of threads
      that should arrive back at the end of this team.  The extra

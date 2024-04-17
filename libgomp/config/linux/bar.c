@@ -80,9 +80,12 @@ gomp_team_barrier_wake (gomp_barrier_t *bar, int count)
 void
 gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
 {
+  // xtask_debug(0, 1, "state = %d.", state);
   unsigned int generation, gen;
   #ifdef GOMP_USE_XQUEUE
+  #ifdef XTASK_ENABLE_PROF
   xstats_barrier_start();
+  #endif
   /**
    * XTask: Design new centralized busy barrier that meets the following requirements:
    * 1. The barrier should be released only when:
@@ -101,28 +104,47 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
   */
   struct gomp_thread *thr = gomp_thread();
   if(__builtin_expect(thr->use_xq, 1)){
+    // xtask_debug(0, 2, "state=%d\n", state);
     while(1){
+      // if(state & BAR_WAS_LAST){
+      //   xtask_debug(0, 0, "looping last bar, state=%d", state);
+      // }
+      #ifdef XTASK_ENABLE_PROF
       xstats_barrier_end();
+      #endif
       xtask_barrier_handle_tasks(state); // should return only when task resource has been depleted
       // gomp_debug(100, "[tid=%d] <barrier-wait-end>: generation=%d, state=%d, state+BAR_INCR=%d\n", omp_get_thread_num(), bar->generation, state, state+BAR_INCR);
+      #ifdef XTASK_ENABLE_PROF
       xstats_barrier_start();
+      #endif
       gen = __atomic_load_n(&bar->generation, MEMMODEL_ACQUIRE);
       if(__builtin_expect(gen == state + BAR_INCR, 0)){
+        #ifdef XTASK_ENABLE_PROF
+        xstats_barrier_end();
+        #endif
         return;
       }
       if(__builtin_expect(state & BAR_WAS_LAST, 0)){
+        // xtask_debug(0, 0, "last bar");
         bar->awaited = bar->total;
         state &= ~BAR_CANCELLED;
         state += BAR_INCR - BAR_WAS_LAST;
         __atomic_store_n(&bar->generation, state, MEMMODEL_RELEASE);
         // futex_wake((int *)&bar->generation, INT_MAX);
-        xtask_debug(20, 2, "exits gomp_team_barrier_wait_end.");
+        // xtask_debug(20, 2, "exits gomp_team_barrier_wait_end.");
+        #ifdef XTASK_ENABLE_PROF
+        xstats_barrier_end();
+        #endif
         return;
+      
     }
-      state &= ~BAR_CANCELLED;
+    // xtask_debug(0, 2, "bar spining gomp_team_barrier_wait_end. gen=%d, state=%d\n", gen, state);
+      // state &= ~BAR_CANCELLED;
     }
-  xtask_debug(20, 2, "exits gomp_team_barrier_wait_end.");
+  // xtask_debug(0, 2, "exits gomp_team_barrier_wait_end.");
+  #ifdef XTASK_ENABLE_PROF
   xstats_barrier_end();
+  #endif
   return;
   }else{ // if not using xq
   #endif
