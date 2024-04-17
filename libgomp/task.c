@@ -252,11 +252,14 @@ gomp_remove_aux_task(unsigned long *last_qid){
 };
 
 
-/*
-This has to be called after thread_dock, before the tasks
+/** author: ww
+ * xflag_init has to be called after thread_dock, before the threads running actual tasks,
+ * so the threads in thread_pool are in place.
+ * and this should be called only once when thread starts, and for master thread after thread is created
+ * FIXME: When entering the 2nd parallel region and so on, the xflag_init hasn't been called anywhere,
+ * I would assume that xflag_init is called only once by each thread.
 */
 void xflag_init(struct gomp_thread *thr){
-	
 	struct xflag *flag = &thr->xflag;
 	flag->thr = thr;
 	int tid = thr->ts.team_id;
@@ -279,12 +282,19 @@ void xflag_init(struct gomp_thread *thr){
 	// xtask_debug(0, 0, "xflag_init, tid=%d, gathered=%d, nchild=%d", tid, flag->gathered, flag->nchild);
 	flag->cidx = !(tid & 1);
 }
+/** author: ww
+ * xflag_reinit is called when the thread is leaving the current barrier.
+ * We pass gomp's barrier state so to align the state of the flag with the barrier's generation.
+ * TODO: This is seems to be optimizable, instead of we store the state, we can just use the bar's state.
+ * I think it is safer to reset the parents' child_done to 0, so that this var to other thread is ready-only
+ * This can reduce complexity of thinking IMO.
+ * 
+*/
 
 void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs){
 	struct xflag *flag = &thr->xflag;
 	flag->state = XFLAG_STATE_RUNNING;
 	flag->gathered = bs;
-	// GOMP_ATOMIC_ST_REL(&flag->on_release, false);
 	flag->on_release = false;
 	if(flag->parent && flag->thr->ts.team_id != 0){
 		GOMP_ATOMIC_ST_REL(&flag->parent->child_done[flag->cidx], 0);
@@ -294,29 +304,30 @@ void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs){
 	// }
 }
 
-/*
-This can only be called by the root
+/** author: ww
+ * xflag_release can only be called by the root thread (thr->ts.team_id == 0).
+ * We are modifying other threads' data structure, so we have to be careful.
+ * We can modify other threads because this is only called once by the root, and after the threads are gathered.
+ * We call xflag_release when the following conditions are met.
+ * 1. xflag_gathered has been called once by the root <- this is to make sure all threads enters the current barrier
+ * 2. xflag_done has been called by the root, and it finds that all the children are done.
+ * 3. call xflag_release by the root.
 */
 static void xflag_release(struct xflag *flag){
-	// if(flag->thr->ts.team_id == 0)
-	// 	xtask_debug(0, 0, "releasing");
-	// assert(flag->thr->ts.team_id == 0);
-	// GOMP_ATOMIC_ST_REL(&flag->on_release, true);
-	// bool before = flag->on_release;
 	flag->on_release = true;
-	// xtask_debug(0, 0, "before=%d, on_release=%d", before, flag->on_release);
 	for(int i = 0; i < flag->nchild; i++){
 		xflag_release(flag->child[i]);
 	}
 }
 
-/* 
-xflag_gathered ensures that xflag_done can pass the first condition when the last barrier is reached,
-this is to prevent xflag_done is called before some thread don't reach the barrier, and it is possible
-that xflag_init hasn't been called by that thread, so we prevent thread from even accessing the data structure
-of different thread.
-The last thread entering the bar do a broadcast to all the other threads, setting the flag gathered to true
-the val root has to be carefully set by thread, in case it is the root, it has to be true
+/** author: ww
+ * xflag_gathered ensures that xflag_done can pass the first condition when the last barrier is reached,
+ * this is to prevent xflag_done is called before some thread don't reach the barrier, and it is possible
+ * that xflag_init hasn't been called by that thread, so we prevent thread from even accessing the data structure
+ * of different thread.
+ * FIXME: idk if this is really necessary, but I think it is better to be safe than sorry.
+ * The last thread entering the bar do a broadcast to all the other threads, setting the flag gathered to true
+ * the val root has to be carefully set by thread, in case it is the root, it has to be true
 */
 static void xflag_gathered(struct xflag *flag, bool root, gomp_barrier_state_t bs){
 	bs = bs & ~BAR_WAS_LAST;
@@ -340,16 +351,17 @@ static void xflag_gathered(struct xflag *flag, bool root, gomp_barrier_state_t b
 	}
 }
 
-long long counter = 0;
-
+/** author: ww
+ * we need to first remove BAR_WAS_LAST since not sure how it can be used
+ * TODO: so the barrier and flag don't handle cancel, future work is to handle cancel
+ * gathered flag is only set when xflag_gathered is called,
+ * and xflag_gathered is called only when the last thread enters the barrier with current bar's state
+ * before gathered, the gathered should be state
+ * after gathered, the gathered should be state + BAR_INCR, so we should wait for current generation
+*/
 static void xflag_done(struct xflag * flag, gomp_barrier_state_t bs){
 	bs = bs & ~BAR_WAS_LAST;
-	/**
-	 * gathered flag is only set when xflag_gathered is called,
-	 * and xflag_gathered is called only when the last thread enters the barrier with current bar's state
-	 * before gathered, the gathered should be state
-	 * after gathered, the gathered should be state + BAR_INCR, so we should wait for current generation
-	*/
+
 	if(flag->gathered!= bs + BAR_INCR)
 		return;
 	if(flag->state == XFLAG_STATE_DONE)
@@ -358,25 +370,16 @@ static void xflag_done(struct xflag * flag, gomp_barrier_state_t bs){
 	for(int i = 0; i < flag->nchild; i++)
 		done &= GOMP_ATOMIC_LD_ACQ(&flag->child_done[i]);
 	done &= !GOMP_ATOMIC_LD_ACQ(&flag->thr->task->td_incomplete_child_tasks);
-	if(flag->thr->ts.team_id == 0){
-		counter ++;
-		// if(counter % 100000 == 0)
-		// xtask_debug(0, 0, "not done, flag=%p, incomplete_child=%ld, nchild=%d, child=%ld, %ld", 
-		// flag,
-		// flag->thr->task->td_incomplete_child_tasks,
-		// flag->nchild,
-		// flag->child_done[0], flag->child_done[1]
-		// );
-	}
-	
-	if(done){
 
+	if(done){
+		// this can only set once
 		flag->state = XFLAG_STATE_DONE;
 		// if we are the root, and all the children are done, release the children
 		if(flag->thr->ts.team_id == 0){
 			xflag_release(flag);
 			return;
 		}
+		// if not, we set our bit at parent to 1 (done)
 		GOMP_ATOMIC_ST_REL(&flag->parent->child_done[flag->cidx], 1);
 		// xtask_debug(0, 0, "done, nchild=%d, child=%ld, %ld, cidx=%d, parent's child = %ld, %ld, parentflag=%p",
 		// flag->nchild,

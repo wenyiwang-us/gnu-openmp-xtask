@@ -697,9 +697,6 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	  nthr->fn = fn;
 	  nthr->data = data;
 	  team->ordered_release[i] = &nthr->release;
-	  #ifdef GOMP_USE_XQUEUE
-	//   xflag_init(nthr);
-	  #endif
 	}
 
       if (__builtin_expect (affinity_thr != NULL, 0))
