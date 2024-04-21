@@ -434,6 +434,18 @@ void xperflog_record(xperf_type_t event, long sample){
 	perflog->eidx++;
 }
 
+void xperflog_wait(){
+	struct gomp_thread *thr = gomp_thread();
+	struct gomp_team *team = thr->ts.team;
+	GOMP_ATOMIC_DEC(&team->xperflog_awaited);
+	int zero = 0;
+	int nthreads = team->nthreads;
+	while(GOMP_ATOMIC_LD_ACQ(&team->xperflog_awaited)!=nthreads && GOMP_ATOMIC_CMPXCHG(&team->xperflog_awaited, &zero, nthreads) != 1){
+		zero = 0;
+		// xtask_debug(0, 0, "here");
+	}
+}
+
 void xperflog_dump(struct gomp_thread *thr){
 	// struct gomp_thread *thr = gomp_thread();
  	struct xperflog *perflog = &thr->xperflog;
@@ -454,6 +466,9 @@ void xperflog_dump(struct gomp_thread *thr){
 	// 	// fwrite(perflog->events, sizeof(xperf_type_t), perflog->eidx, perflog->fp);
 	// 	// fwrite(perflog->samples, sizeof(unsigned long long), perflog->sidx, perflog->fp);
 	// 	// fclose(perflog->fp);
+
+	// put a bar here
+	xperflog_wait();
 }
 
 /**

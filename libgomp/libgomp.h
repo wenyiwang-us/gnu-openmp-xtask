@@ -597,6 +597,7 @@ typedef struct gomp_task gomp_task_t;
 #define TASK_SUCCESSFULLY_PUSHED 0
 #define TASK_NOT_PUSHED 1
 
+#define GOMP_ATOMIC_CMPXCHG(PTR, OLD, NEW) __atomic_compare_exchange_n (PTR, OLD, NEW, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)
 #define GOMP_ATOMIC_ST_REL(PTR, VAL) __atomic_store_n (PTR, VAL, __ATOMIC_RELEASE)
 #define GOMP_ATOMIC_LD_ACQ(PTR) __atomic_load_n (PTR, __ATOMIC_ACQUIRE)
 #define GOMP_ATOMIC_ST_RLX(PTR, VAL) __atomic_store_n (PTR, VAL, __ATOMIC_RELAXED)
@@ -772,6 +773,7 @@ struct gomp_team
   gomp_barrier_t barrier;
 #ifdef GOMP_USE_XQUEUE
   long xtask_count;
+  volatile int xperflog_awaited;
 #endif
 
   /* Initial work shares, to avoid allocating any gomp_work_share
@@ -1205,9 +1207,10 @@ extern void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs);
 
 #include <x86intrin.h>
 extern void xperflog_init();
+extern void xperflog_wait(); // all threads wait for current dump to finish.
 extern void xperflog_record(xperf_type_t event, long sample);
-extern void xperflog_dump();
-extern void xperflog_reset();
+extern void xperflog_dump(struct gomp_thread *thr);
+extern void xperflog_reset(struct gomp_thread *thr);
 extern void xperflog_dump_reset();
 
 
