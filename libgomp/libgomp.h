@@ -866,6 +866,7 @@ typedef struct xperflog {
   // unsigned long long ts[XPERFLOG_MAX_EVENTS]; // timestamp, __rdtscp or __rdtsc
   // xperf_event_type_t events[XPERFLOG_MAX_EVENTS]; // event type
   // long sample[XPERFLOG_MAX_EVENTS]; // sample index
+  char filename[32]; // log file name
   void *fp; // use void * instead of FILE * to avoid including stdio.h here
   unsigned long long *ts; // timestamp, __rdtscp or __rdtsc
   xperf_type_t *events; // event type

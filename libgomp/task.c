@@ -402,11 +402,10 @@ void xperflog_init(){
 		// xperflog_reset();
 		return;
 	}
+	perflog->fp = NULL;
 	// xtask_debug(0, 0, "xperf - init."); 	
 	// append tid to the filename
-	char filename[32];
-	sprintf(filename, "xperflog_%d_%d.csv", thr->ts.team_id, perflog->generation);
-	perflog->fp = (void *)fopen(filename, "w");
+	sprintf(perflog->filename, "xperflog_%d_%d.csv", thr->ts.team_id, perflog->generation);
 	perflog->ts = (unsigned long long*)gomp_malloc(sizeof(unsigned long long) * XPERFLOG_MAX_EVENTS);
 	perflog->events = (xperf_type_t*)gomp_malloc(sizeof(xperf_type_t) * XPERFLOG_MAX_EVENTS);
 	perflog->samples = (unsigned long long*)gomp_malloc(sizeof(unsigned long long) * XPERFLOG_MAX_EVENTS);
@@ -438,6 +437,7 @@ void xperflog_record(xperf_type_t event, long sample){
 void xperflog_dump(struct gomp_thread *thr){
 	// struct gomp_thread *thr = gomp_thread();
  	struct xperflog *perflog = &thr->xperflog;
+	perflog->fp = (void *)fopen(perflog->filename, "w");
 	if(perflog->fp == NULL){
 		xtask_debug(0, 0, "xperf - dump: file pointer is null.");
 		return;
@@ -448,7 +448,8 @@ void xperflog_dump(struct gomp_thread *thr){
 	for(unsigned long long i = 0; i < perflog->eidx; i++){
 		fprintf(perflog->fp, "%llu, %d, %llu,\n", perflog->ts[i], perflog->events[i], perflog->events[i] & XPERFLOG_FLAG_SAMPLE ? perflog->samples[j++]: 0);
 	}
-	// fclose(perflog->fp);
+	fclose(perflog->fp);
+	perflog->fp = NULL;
 	// 	// fwrite(perflog->ts, sizeof(unsigned long long), perflog->eidx, perflog->fp);
 	// 	// fwrite(perflog->events, sizeof(xperf_type_t), perflog->eidx, perflog->fp);
 	// 	// fwrite(perflog->samples, sizeof(unsigned long long), perflog->sidx, perflog->fp);
@@ -468,9 +469,8 @@ void xperflog_reset(struct gomp_thread *thr){
 	perflog->sidx = 0;
 	// xtask_debug(0, 0, "xperf - reset."); 	
 	// append tid and generation to the filename
-	char filename[32];
-	sprintf(filename, "xperflog_%d_%d.csv", thr->ts.team_id, perflog->generation);
-	perflog->fp = (void *)fopen(filename, "w");
+	sprintf(perflog->filename, "xperflog_%d_%d.csv", thr->ts.team_id, perflog->generation);
+	perflog->fp = (void *)fopen(perflog->filename, "w");
 	if(thr->ts.team_id == 0)
 		xperflog_record(XPERF_TEAM_START, 0);
 	else
