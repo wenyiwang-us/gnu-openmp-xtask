@@ -455,10 +455,10 @@ void xperflog_dump(struct gomp_thread *thr){
 		return;
 	}
 	// lets first do this using fprintf to output as csv file
-	fprintf(perflog->fp, "timestamp, event, sample,\n");
+	fprintf(perflog->fp, "timestamp,event,sample\n");
 	unsigned long long j = 0;
 	for(unsigned long long i = 0; i < perflog->eidx; i++){
-		fprintf(perflog->fp, "%llu, %d, %llu,\n", perflog->ts[i], perflog->events[i], perflog->events[i] & XPERFLOG_FLAG_SAMPLE ? perflog->samples[j++]: 0);
+		fprintf(perflog->fp, "%llu,%d,%llu\n", perflog->ts[i], perflog->events[i], perflog->events[i] & XPERFLOG_FLAG_SAMPLE ? perflog->samples[j++]: 0);
 	}
 	fclose(perflog->fp);
 	perflog->fp = NULL;
