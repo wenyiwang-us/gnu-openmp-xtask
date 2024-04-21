@@ -112,6 +112,7 @@ gomp_thread_start (void *xdata)
 	if(thr->use_xq && thr->td_task_q == NULL)
 	  	gomp_alloc_task_q(thr);
 	// xtask_debug(0, 0, "thread started");
+	xperflog_init();
 #ifdef XTASK_ENABLE_PROF
 	xstats_init();
 #endif 
@@ -372,6 +373,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	xtask_debug(0, 0, "XTASK v.1.4, gomp_team_start!, use_xq=%d, nested=%d, level=%d\n", thr->use_xq, nested, thr->ts.level);
   	gomp_num_task_queues = nthreads;
   	gomp_alloc_task_q(thr);
+	xperflog_init();
 #endif
 
   if (__builtin_expect (gomp_places_list != NULL, 0) && thr->place == 0)

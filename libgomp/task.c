@@ -389,6 +389,113 @@ static void xflag_done(struct xflag * flag, gomp_barrier_state_t bs){
 	}
 }
 
+/**
+ * XPerflog - record timestamps and corresponding sample number
+*/
+#include <stdio.h>
+void xperflog_init(){
+	struct gomp_thread *thr = gomp_thread();
+	struct xperflog *perflog = &thr->xperflog;
+	
+	// team thread's init may be called multiple times
+	if(perflog->generation){
+		// xperflog_reset();
+		return;
+	}
+	// xtask_debug(0, 0, "xperf - init."); 	
+	// append tid to the filename
+	char filename[32];
+	sprintf(filename, "xperflog_%d_%d.csv", thr->ts.team_id, perflog->generation);
+	perflog->fp = (void *)fopen(filename, "w");
+	perflog->ts = (unsigned long long*)gomp_malloc(sizeof(unsigned long long) * XPERFLOG_MAX_EVENTS);
+	perflog->events = (xperf_type_t*)gomp_malloc(sizeof(xperf_type_t) * XPERFLOG_MAX_EVENTS);
+	perflog->samples = (unsigned long long*)gomp_malloc(sizeof(unsigned long long) * XPERFLOG_MAX_EVENTS);
+	if(thr->ts.team_id == 0)
+		xperflog_record(XPERF_TEAM_START, 0);
+	else
+		xperflog_record(XPERF_THREAD_START, 0);
+	perflog->generation++;
+}
+
+
+void xperflog_record(xperf_type_t event, long sample){
+	struct gomp_thread *thr = gomp_thread();
+	struct xperflog *perflog = &thr->xperflog;
+	if(perflog->eidx >= XPERFLOG_MAX_EVENTS){
+		xtask_debug(0, 0, "xperf - record: idx exceeds max events.");
+		return;
+	}
+	perflog->ts[perflog->eidx] = __rdtsc();
+	perflog->events[perflog->eidx] = event;
+	if(sample){
+		perflog->events[perflog->eidx] |= XPERFLOG_FLAG_SAMPLE;
+		perflog->samples[perflog->sidx] = sample;
+		perflog->sidx++;
+	}
+	perflog->eidx++;
+}
+
+void xperflog_dump(struct gomp_thread *thr){
+	// struct gomp_thread *thr = gomp_thread();
+ 	struct xperflog *perflog = &thr->xperflog;
+	if(perflog->fp == NULL){
+		xtask_debug(0, 0, "xperf - dump: file pointer is null.");
+		return;
+	}
+	// lets first do this using fprintf to output as csv file
+	fprintf(perflog->fp, "timestamp, event, sample,\n");
+	unsigned long long j = 0;
+	for(unsigned long long i = 0; i < perflog->eidx; i++){
+		fprintf(perflog->fp, "%llu, %d, %llu,\n", perflog->ts[i], perflog->events[i], perflog->events[i] & XPERFLOG_FLAG_SAMPLE ? perflog->samples[j++]: 0);
+	}
+	// fclose(perflog->fp);
+	// 	// fwrite(perflog->ts, sizeof(unsigned long long), perflog->eidx, perflog->fp);
+	// 	// fwrite(perflog->events, sizeof(xperf_type_t), perflog->eidx, perflog->fp);
+	// 	// fwrite(perflog->samples, sizeof(unsigned long long), perflog->sidx, perflog->fp);
+	// 	// fclose(perflog->fp);
+}
+
+/**
+ * This can only be called after init, and the generation is gaurantted to be > 0
+*/
+void xperflog_reset(struct gomp_thread *thr){
+	struct xperflog *perflog = &thr->xperflog;
+	if(perflog->fp){
+		fclose(perflog->fp);
+		perflog->fp = NULL;
+	}
+	perflog->eidx = 0;
+	perflog->sidx = 0;
+	// xtask_debug(0, 0, "xperf - reset."); 	
+	// append tid and generation to the filename
+	char filename[32];
+	sprintf(filename, "xperflog_%d_%d.csv", thr->ts.team_id, perflog->generation);
+	perflog->fp = (void *)fopen(filename, "w");
+	if(thr->ts.team_id == 0)
+		xperflog_record(XPERF_TEAM_START, 0);
+	else
+		xperflog_record(XPERF_THREAD_START, 0);
+	perflog->generation++;
+}
+
+static inline void xperflog_done(struct gomp_thread *thr){
+	if(thr->xperflog.fp){
+		fclose(thr->xperflog.fp);
+	}
+	// fclose(thr->xperflog.fp);
+	// free(thr->xperflog.ts);
+	// free(thr->xperflog.events);
+	// free(thr->xperflog.samples);
+}
+
+void xperflog_dump_reset(){
+	struct gomp_thread *thr = gomp_thread();
+	xperflog_dump(thr);
+	xperflog_reset(thr);
+	// xperflog_done(thr);
+}
+
+
 #ifdef XTASK_ENABLE_PROF
 inline void xstats_init(){
 	struct gomp_thread *thr = gomp_thread();
@@ -1046,6 +1153,7 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 	   long arg_size, long arg_align, bool if_clause, unsigned flags,
 	   void **depend, int priority_arg, void *detach)
 {
+xperflog_record(XPERF_GOMP_TASK_START, 0);
 #ifdef XTASK_ENABLE_PROF
   xstats_tasking_start();
   xstats_new_task_start();
@@ -1306,7 +1414,9 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 		xstats_task_start();
 		#endif
 
+		xperflog_record(XPERF_TASK_START, 0);
 		task->fn(task->fn_data);
+		xperflog_record(XPERF_TASK_END, 0);
 		thr->task = parent;
 		GOMP_ATOMIC_DEC(&task->parent->td_incomplete_child_tasks);
 		gomp_finish_task(task);
@@ -1318,9 +1428,9 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 		xstats_new_task_end(0);
 		#endif
 		// GOMP_ATOMIC_DEC(&team->xtask_count);
-		
-		return;
 	}
+	xperflog_record(XPERF_GOMP_TASK_END, 0);
+	return;
 	}else{ //!xq - begin
 #endif
       priority_queue_insert (PQ_CHILDREN, &parent->children_queue,
@@ -2146,10 +2256,6 @@ gomp_task_run_post_remove_taskgroup (struct gomp_task *child_task)
 
 #ifdef GOMP_USE_XQUEUE
 void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
-#ifdef XTASK_ENABLE_PROF
-	xstats_tasking_start();
-	xstats_barrier_start();
-#endif
 	struct gomp_thread *thr = gomp_thread ();
 	struct gomp_team *team = thr->ts.team;
 	struct gomp_task *task = thr->task;
@@ -2163,39 +2269,21 @@ void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
 	" xtask_count=%ld, generation=%d. \n", 
 	omp_get_thread_num(), gomp_team_barrier_waiting_for_tasks (&team->barrier), team->xtask_count, team->barrier.generation);
 	if(gomp_barrier_last_thread(state)){
-			// gomp_team_barrier_done(&team->barrier, state);
-			// xtask_debug(0, 0, "gather");
 			xflag_gathered(&thr->xflag, thr->ts.team_id == 0, state);
-			// gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): LAST THREAD, generation=%d\n", omp_get_thread_num(), team->barrier.generation);
-	}
+		}
 
 bool cancelled = false;
 while(1){
 	while(1){
-	// while(GOMP_ATOMIC_LD_ACQ(&team->xtask_count)!=0 || GOMP_ATOMIC_LD_ACQ(&thr->task->td_incomplete_child_tasks)!=0){
 		cancelled = false;
 		if(use_own_tasks){
-			#ifdef XTASK_ENABLE_PROF
-			xstats_barrier_end();
-			#endif
 			child_task = gomp_remove_my_task();
-			#ifdef XTASK_ENABLE_PROF
-			xstats_barrier_start();
-			#endif
 		}
 
 		if((child_task == NULL) && (thr->num_queues > 1)){
 			use_own_tasks = 0;
-			#ifdef XTASK_ENABLE_PROF
-			xstats_barrier_end();
-			#endif
 			child_task = gomp_remove_aux_task(&last_qid);
-			#ifdef XTASK_ENABLE_PROF
-			xstats_barrier_start();
-			#endif
 		}
-		// if(gomp_barrier_last_thread(state))
-		// 	xtask_debug(0, 0, "thr->xflag.on_release=%d, thr->task->td_incomplete_child_tasks=%ld, child_task=%p\n", thr->xflag.on_release, thr->task->td_incomplete_child_tasks, child_task);
 		//bogus for victim
 		if(new_victim)
 			new_victim = new_victim;
@@ -2222,17 +2310,9 @@ while(1){
 				}
 				}
 			else{
-				#ifdef XTASK_ENABLE_PROF
-				// Note: The closure of a start and an end doesn't represent the execution time of the task, it only register a task start event for the thread
-				xstats_barrier_end();
-				xstats_task_start();
-				#endif
+				xperflog_record(XPERF_TASK_START, 0);
 				child_task->fn (child_task->fn_data);
-				#ifdef XTASK_ENABLE_PROF
-				// This register an end timestamp for this thread
-				xstats_task_end();
-				xstats_barrier_start();
-				#endif
+				xperflog_record(XPERF_BAR_START, 0);
 			}
 				
 			thr->task = task;
@@ -2249,8 +2329,6 @@ while(1){
 		{
 			GOMP_ATOMIC_DEC(&child_task->parent->td_incomplete_child_tasks);
 
-			// GOMP_ATOMIC_DEC(&team->xtask_count);
-	
 			finish_cancelled:;
 			to_free = child_task;
 			child_task = NULL;	
@@ -2270,10 +2348,7 @@ while(1){
 	}
 		
 }
-	gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): EXIT!!\n", omp_get_thread_num());
-	#ifdef XTASK_ENABLE_PROF
-	xstats_barrier_end();
-	#endif
+ // bar exits here
 }
 #endif
 
@@ -2426,10 +2501,8 @@ gomp_barrier_handle_tasks (gomp_barrier_state_t state)
 void
 GOMP_taskwait (void)
 {
-#if defined(GOMP_USE_XQUEUE) && defined(XTASK_ENABLE_PROF)
-  xstats_tasking_start();
-  xstats_taskwait_start();
-#endif
+	xperflog_record(XPERF_TASKWAIT_START, 0);
+
   struct gomp_thread *thr = gomp_thread ();
   struct gomp_team *team = thr->ts.team;
   struct gomp_task *task = thr->task;
@@ -2447,9 +2520,7 @@ GOMP_taskwait (void)
 #ifdef GOMP_USE_XQUEUE
 	if(__builtin_expect(thr->use_xq, 1)){
 		if (task == NULL){
-			#ifdef XTASK_ENABLE_PROF
-			xstats_taskwait_end();
-			#endif
+			xperflog_record(XPERF_TASKWAIT_END, 0);
 			return;
 		}
 			
@@ -2548,18 +2619,9 @@ GOMP_taskwait (void)
 					}
 				}
 				else{
-					#ifdef XTASK_ENABLE_PROF
-					// Note: The closure of a start and an end doesn't represent the execution time of the task, it only register a task start event for the thread
-					xstats_taskwait_end();
-					xstats_task_start();
-					#endif
+					xperflog_record(XPERF_TASK_START, 0);
 					child_task->fn (child_task->fn_data);
-					#ifdef XTASK_ENABLE_PROF
-					// This register an end timestamp for this thread
-					xstats_task_end();
-					xstats_taskwait_start();
-					#endif
-
+					xperflog_record(XPERF_TASKWAIT_START, 0);
 				}
 					
 				thr->task = task; // ww: task resumed
@@ -2602,9 +2664,9 @@ GOMP_taskwait (void)
 		task->taskwait = NULL;
 		if (destroy_taskwait)
 			gomp_sem_destroy(&taskwait.taskwait_sem);
-		#ifdef XTASK_ENABLE_PROF
-		xstats_taskwait_end();
-		#endif
+	
+		// record the exit of a taskwait
+		xperflog_record(XPERF_TASKWAIT_END, 0);
 		return;
 	}else{ // taskwait - no-xq begin
 #endif
@@ -2748,9 +2810,6 @@ GOMP_taskwait (void)
     }
 #ifdef GOMP_USE_XQUEUE
 	} // taskwait - no-xq end
-	#ifdef XTASK_ENABLE_PROF
-	xstats_taskwait_end();
-	#endif
 #endif
 }
 

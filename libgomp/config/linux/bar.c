@@ -84,9 +84,7 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
   // xtask_debug(0, 1, "state = %d.", state);
   unsigned int generation, gen;
   #ifdef GOMP_USE_XQUEUE
-  #ifdef XTASK_ENABLE_PROF
-  xstats_barrier_start();
-  #endif
+  xperflog_record(XPERF_BAR_START, 0);
   /**
    * XTask: Design new centralized busy barrier that meets the following requirements:
    * 1. The barrier should be released only when:
@@ -164,10 +162,9 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
     // flag of current thread is reinit to the right state.
     xflag_reinit(thr, state);
    
-  #ifdef XTASK_ENABLE_PROF
-  xstats_barrier_end();
-  #endif
-  return;
+    xperflog_record(XPERF_BAR_END, 0);
+    xperflog_dump_reset();
+    return;
   }else{ // if not using xq
   #endif
 

@@ -194,6 +194,7 @@ __attribute__ ((format (printf, 4, 5)))
   } while (0)
 
 
+
 #ifdef XTASK_ENABLE_PROF
 extern void xtask_prof(int, int, const char*, const char *, ...)
 __attribute__ ((format (printf, 4, 5)))
@@ -835,6 +836,51 @@ struct xflag{
 }
 __attribute__((aligned(64)));
 
+#define XPERFLOG_MAX_EVENTS 1<<27 // 128M events
+// lets use bit 10 to indicate if the event is a sample event
+#define XPERFLOG_FLAG_SAMPLE 0x400
+// #include <stdio.h>
+typedef enum xperf_event_type{
+/**
+ * Below is the event types with/without sample
+*/
+  XPERF_TEAM_START,
+  XPERF_TEAM_END,
+  XPERF_THREAD_START,
+  XPERF_THREAD_END,
+  XPERF_TASK_START,
+  XPERF_TASK_END,
+  XPERF_TASKWAIT_START,
+  XPERF_TASKWAIT_END,
+  XPERF_BAR_START,
+  XPERF_BAR_END,
+
+  XPERF_GOMP_TASK_START, // timestamp the GOMP_task construct exec time
+  XPERF_GOMP_TASK_END,
+  XPERF_TASKING_START,
+  XPERF_TASKING_END,
+} xperf_type_t;
+
+
+typedef struct xperflog {
+  // unsigned long long ts[XPERFLOG_MAX_EVENTS]; // timestamp, __rdtscp or __rdtsc
+  // xperf_event_type_t events[XPERFLOG_MAX_EVENTS]; // event type
+  // long sample[XPERFLOG_MAX_EVENTS]; // sample index
+  void *fp; // use void * instead of FILE * to avoid including stdio.h here
+  unsigned long long *ts; // timestamp, __rdtscp or __rdtsc
+  xperf_type_t *events; // event type
+  unsigned long long *samples; // samples, count or whatever
+  unsigned long long eidx; // index of the log
+  unsigned long long sidx; // sample index
+  // unsigned long long len; // length of the log, could it be just eidx?
+  // redundent // unsigned long counter[XPERF_N_COUNTERS]; // counters
+  int tid; // thread id
+  int generation;
+  // should flush then reinit after each team barrier
+} xperflog_t
+__attribute__((aligned(64)))
+;
+
 
 #ifdef XTASK_ENABLE_PROF
 struct xstats_data // xtask stats data
@@ -907,6 +953,7 @@ struct gomp_thread
   unsigned long tl_task_queued_count;
   bool use_xq; // use xq or not, default is yes, when incompat clauses appeared, will use default GNU tasking implementation
   struct xflag xflag;
+  struct xperflog xperflog;
 #ifdef XTASK_ENABLE_PROF
   struct xstats_data xd;
 #endif
@@ -1154,9 +1201,15 @@ extern void xflag_init(struct gomp_thread *thr);
 extern void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs);
 // extern void xflag_build_tree(struct xflag *, int, int);
 // extern void xflag_optimize_tree(struct xflag *);
-#ifdef XTASK_ENABLE_PROF
 
-#endif
+#include <x86intrin.h>
+extern void xperflog_init();
+extern void xperflog_record(xperf_type_t event, long sample);
+extern void xperflog_dump();
+extern void xperflog_reset();
+extern void xperflog_dump_reset();
+
+
 #ifdef XTASK_ENABLE_PROF
 #include <x86intrin.h>
 

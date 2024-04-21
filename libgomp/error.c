@@ -63,19 +63,6 @@ gomp_debug (int kind, const char *msg, ...)
 
 #ifdef GOMP_USE_XQUEUE
 #undef xtask_debug
-void concat(char *dest, const char *src1, const char *src2){
-  while(*src1){
-    *dest = *src1;
-    src1++;
-    dest++;
-  }
-  while(*src2){
-    *dest = *src2;
-    src2++;
-    dest++;
-  }
-  *dest = '\0';
-}
 void
 xtask_debug (int kind, int level, const char* func, const char *msg, ...)
 {
