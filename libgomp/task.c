@@ -470,7 +470,7 @@ void xperflog_reset(struct gomp_thread *thr){
 	// xtask_debug(0, 0, "xperf - reset."); 	
 	// append tid and generation to the filename
 	sprintf(perflog->filename, "xperflog_%d_%d.csv", thr->ts.team_id, perflog->generation);
-	perflog->fp = (void *)fopen(perflog->filename, "w");
+	// perflog->fp = (void *)fopen(perflog->filename, "w");
 	if(thr->ts.team_id == 0)
 		xperflog_record(XPERF_TEAM_START, 0);
 	else
