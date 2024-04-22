@@ -393,9 +393,11 @@ static void xflag_done(struct xflag * flag, gomp_barrier_state_t bs){
  * XPerflog - record timestamps and corresponding sample number
 */
 #include <stdio.h>
+#define XPERFLOG_PATH "/stor/auxiliary/wwang/xperlog/tmp/xperflog_%d_%d.csv"
 void xperflog_init(){
 	struct gomp_thread *thr = gomp_thread();
 	struct xperflog *perflog = &thr->xperflog;
+	perflog->xperflog_path = getenv("XPERFLOG_PATH");
 	
 	// team thread's init may be called multiple times
 	if(perflog->generation){
@@ -403,9 +405,10 @@ void xperflog_init(){
 		return;
 	}
 	perflog->fp = NULL;
-	// xtask_debug(0, 0, "xperf - init."); 	
 	// append tid to the filename
-	sprintf(perflog->filename, "xperflog_%d_%d.csv", thr->ts.team_id, perflog->generation);
+	snprintf(perflog->filename, 64, "%s/xperflog_%d_%d.csv", perflog->xperflog_path, thr->ts.team_id, perflog->generation);
+	// printf("filename=%s\n", perflog->filename);
+	// sprintf(perflog->filename, XPERFLOG_PATH, thr->ts.team_id, perflog->generation);
 	perflog->ts = (unsigned long long*)gomp_malloc(sizeof(unsigned long long) * XPERFLOG_MAX_EVENTS);
 	perflog->events = (xperf_type_t*)gomp_malloc(sizeof(xperf_type_t) * XPERFLOG_MAX_EVENTS);
 	perflog->samples = (unsigned long long*)gomp_malloc(sizeof(unsigned long long) * XPERFLOG_MAX_EVENTS);
@@ -484,7 +487,9 @@ void xperflog_reset(struct gomp_thread *thr){
 	perflog->sidx = 0;
 	// xtask_debug(0, 0, "xperf - reset."); 	
 	// append tid and generation to the filename
-	sprintf(perflog->filename, "xperflog_%d_%d.csv", thr->ts.team_id, perflog->generation);
+	// sprintf(perflog->filename, XPERFLOG_PATH, thr->ts.team_id, perflog->generation);
+	snprintf(perflog->filename, 64, "%s/xperflog_%d_%d.csv", perflog->xperflog_path, thr->ts.team_id, perflog->generation);
+	// printf("filename=%s\n", perflog->filename);
 	// perflog->fp = (void *)fopen(perflog->filename, "w");
 	if(thr->ts.team_id == 0)
 		xperflog_record(XPERF_TEAM_START, 0);
