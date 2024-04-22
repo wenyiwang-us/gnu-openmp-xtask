@@ -1409,43 +1409,29 @@ xperflog_record(XPERF_GOMP_TASK_START, 0);
 	}
 #ifdef GOMP_USE_XQUEUE
 	if(use_xq){
+		
 		GOMP_ATOMIC_INC(&task->parent->td_incomplete_child_tasks);
-		// GOMP_ATOMIC_INC(&team->xtask_count);
-	#ifdef XTASK_ENABLE_PROF
-	xstats_new_task_end(1);
-	#endif
-	if(gomp_push_task (task) == TASK_NOT_PUSHED){
-		#ifdef XTASK_ENABLE_PROF
-		xstats_new_task_start();
-		#endif
-		// execute it right away
-		task->kind = GOMP_TASK_TIED;
-		thr->task = task;
-	
 
-		// xstats profiler
-		#ifdef XTASK_ENABLE_PROF
-		xstats_new_task_end(0);
-		xstats_task_start();
-		#endif
+		if(gomp_push_task (task) == TASK_NOT_PUSHED){
+		
+			// execute it right away
+			task->kind = GOMP_TASK_TIED;
+			thr->task = task;
 
-		xperflog_record(XPERF_TASK_START, 0);
-		task->fn(task->fn_data);
-		xperflog_record(XPERF_TASK_END, 0);
-		thr->task = parent;
-		GOMP_ATOMIC_DEC(&task->parent->td_incomplete_child_tasks);
-		gomp_finish_task(task);
-		free(task);
+			xperflog_record(XPERF_TASK_START, 0);
+			task->fn(task->fn_data);
+			xperflog_record(XPERF_TASK_END, 0);
+			xperflog_record(XPERF_GOMP_TASK_START, 0);
 
-		// xstats profiler
-		#ifdef XTASK_ENABLE_PROF
-		xstats_task_end();
-		xstats_new_task_end(0);
-		#endif
-		// GOMP_ATOMIC_DEC(&team->xtask_count);
-	}
-	xperflog_record(XPERF_GOMP_TASK_END, 0);
-	return;
+			thr->task = parent;
+			GOMP_ATOMIC_DEC(&task->parent->td_incomplete_child_tasks);
+			gomp_finish_task(task);
+			free(task);
+			return;
+			// GOMP_ATOMIC_DEC(&team->xtask_count);
+		}
+		
+		return;
 	}else{ //!xq - begin
 #endif
       priority_queue_insert (PQ_CHILDREN, &parent->children_queue,
@@ -2327,6 +2313,7 @@ while(1){
 			else{
 				xperflog_record(XPERF_TASK_START, 0);
 				child_task->fn (child_task->fn_data);
+				xperflog_record(XPERF_TASK_END, 0); // task end can be used to encapsulate the task
 				xperflog_record(XPERF_BAR_START, 0);
 			}
 				
@@ -2636,6 +2623,7 @@ GOMP_taskwait (void)
 				else{
 					xperflog_record(XPERF_TASK_START, 0);
 					child_task->fn (child_task->fn_data);
+					xperflog_record(XPERF_TASK_END, 0); // task end can be used to encapsulate the task
 					xperflog_record(XPERF_TASKWAIT_START, 0);
 				}
 					
