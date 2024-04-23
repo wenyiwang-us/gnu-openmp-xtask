@@ -772,7 +772,6 @@ struct gomp_team
   /* This barrier is used for most synchronization of the team.  */
   gomp_barrier_t barrier;
 #ifdef GOMP_USE_XQUEUE
-  long xtask_count;
   volatile int xperflog_awaited;
 #endif
 
@@ -841,52 +840,73 @@ __attribute__((aligned(64)));
 #define XPERFLOG_MAX_EVENTS 1<<27 // 128M events
 // lets use bit 10 to indicate if the event is a sample event
 #define XPERFLOG_FLAG_SAMPLE 0x400
-// #include <stdio.h>
+#define XPERF_END_SHIFT 4
 typedef enum xperf_event_type{
 /**
  * Below is the event types with/without sample
 */
-  XPERF_THREAD_START,
-  XPERF_TASK_START,
+  XPERF_NULL,
+  XPERF_THREAD,
+  XPERF_TASK,
+  XPERF_GOMP_TASK,
+  XPERF_TASKWAIT,
+  XPERF_BAR, // 0b101
 
-  XPERF_GOMP_TASK_START,
-  XPERF_TASKWAIT_START,
-  XPERF_BAR_START,
-  
-  XPERF_TASKING_START,
+  XPERF_N_EVENTS,
 
-  XPERF_N_START_EVENTS,
+  XPERF_THREAD_END = XPERF_THREAD << XPERF_END_SHIFT,
+  XPERF_TASK_END = XPERF_TASK << XPERF_END_SHIFT,
+  XPERF_GOMP_TASK_END = XPERF_GOMP_TASK << XPERF_END_SHIFT,
+  XPERF_TASKWAIT_END = XPERF_TASKWAIT << XPERF_END_SHIFT,
+  XPERF_BAR_END = XPERF_BAR << XPERF_END_SHIFT,
 
-  XPERF_GOMP_TASK_RESUME,
-  XPERF_TASKWAIT_RESUME,
-  XPERF_BAR_RESUME,
+  // XPERF_THREAD_START        = 0,
+  // XPERF_TASK_START          = 1,
+  // XPERF_GOMP_TASK_START     = 1 << 1,
+  // XPERF_TASKWAIT_START      = 1 << 2,
+  // XPERF_BAR_START           = 1 << 3,
+  // XPERF_TASKING_START       = 1 << 4,
 
-  XPERF_THREAD_END,
-  XPERF_GOMP_TASK_END,
-  XPERF_TASK_END,
-  XPERF_TASKWAIT_END,
-  XPERF_BAR_END,
-  XPERF_TASKING_END,
+  // XPERF_GOMP_TASK_RESUME    = 1 << 6,
+  // XPERF_TASKWAIT_RESUME     = 1 << 7,
+  // XPERF_BAR_RESUME          = 1 << 8,
+
+  // XPERF_THREAD_END          = 1 << 9,
+  // XPERF_GOMP_TASK_END       = 1 << 10,
+  // XPERF_TASK_END            = 1 << 11,
+  // XPERF_TASKWAIT_END        = 1 << 12,
+  // XPERF_BAR_END             = 1 << 13,
+  // XPERF_TASKING_END         = 1 << 14,
    // timestamp the GOMP_task construct exec time
 
-  XPERFLOG_FINAL
+  // XPERFLOG_FINAL            = 1 << 15,
   
 } xperf_type_t;
 
+typedef struct xperflog_cell {
+  unsigned long long ts; // timestamp, __rdtscp or __rdtsc
+  xperf_type_t event; // event type
+  unsigned long long hfref; // frame reference number for highbit event
+  unsigned long long lfref; // frame reference number for lowbit event
+} xperflog_cell_t
+__attribute__((aligned(64)));
 
 typedef struct xperflog {
   // unsigned long long ts[XPERFLOG_MAX_EVENTS]; // timestamp, __rdtscp or __rdtsc
   // xperf_event_type_t events[XPERFLOG_MAX_EVENTS]; // event type
   // long sample[XPERFLOG_MAX_EVENTS]; // sample index
+  unsigned long long frefc[XPERF_N_EVENTS]; // frame refernce counters
+  unsigned long long eidx; // index of the log
+  // unsigned long long frefidx; // sample index
+  xperflog_cell_t *log; // log
+
   char *xperflog_path;
   char filename[64]; // log file name
   void *fp; // use void * instead of FILE * to avoid including stdio.h here
-  unsigned long long *ts; // timestamp, __rdtscp or __rdtsc
-  xperf_type_t *events; // event type
-  unsigned long long eref[XPERF_N_START_EVENTS]; // event refernce
-  unsigned long long *samples; // samples, count or whatever
-  unsigned long long eidx; // index of the log
-  unsigned long long sidx; // sample index
+  // unsigned long long *ts; // timestamp, __rdtscp or __rdtsc
+  // xperf_type_t *events; // event type
+  // unsigned long long *fref; // samples, count or whatever
+  // unsigned long long *fref1; // ugly, but for now, just use it
   // unsigned long long len; // length of the log, could it be just eidx?
   // redundent // unsigned long counter[XPERF_N_COUNTERS]; // counters
   int tid; // thread id
@@ -1220,9 +1240,9 @@ extern void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs);
 #include <x86intrin.h>
 extern void xperflog_init();
 extern void xperflog_wait(); // all threads wait for current dump to finish.
-extern void xperflog_record(xperf_type_t event, unsigned long long sample);
-extern void xperflog_dump(struct gomp_thread *thr);
-extern void xperflog_reset(struct gomp_thread *thr);
+extern void xperflog_record(xperf_type_t, unsigned long long, unsigned long long);
+extern void xperflog_dump(struct gomp_thread *);
+extern void xperflog_reset(struct gomp_thread *);
 extern void xperflog_dump_reset();
 
 

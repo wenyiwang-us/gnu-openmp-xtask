@@ -239,11 +239,6 @@ gomp_new_team (unsigned nthreads)
 
   team->task_detach_count = 0;
 
-	#ifdef GOMP_USE_XQUEUE
-	GOMP_ATOMIC_ST_REL(&team->xtask_count, 0);
-	#endif
-	
-
   return team;
 }
 

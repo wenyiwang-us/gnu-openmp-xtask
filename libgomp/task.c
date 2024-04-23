@@ -390,10 +390,23 @@ static void xflag_done(struct xflag * flag, gomp_barrier_state_t bs){
 }
 
 /**
- * XPerflog - record timestamps and corresponding sample number
+ * XPerflog - record timestamps and corresponding hfref number
 */
 #include <stdio.h>
 #define XPERFLOG_PATH "/stor/auxiliary/wwang/xperlog/tmp/xperflog_%d_%d.csv"
+
+static inline unsigned long long xperflog_get_new_fref(xperf_type_t event){
+	struct gomp_thread *thr = gomp_thread();
+	struct xperflog *perflog = &thr->xperflog;
+	return ++perflog->frefc[event];
+}
+
+static inline unsigned long long xperflog_get_fref(xperf_type_t event){
+	struct gomp_thread *thr = gomp_thread();
+	struct xperflog *perflog = &thr->xperflog;
+	return perflog->frefc[event];
+}
+
 void xperflog_init(){
 	struct gomp_thread *thr = gomp_thread();
 	struct xperflog *perflog = &thr->xperflog;
@@ -409,20 +422,32 @@ void xperflog_init(){
 	snprintf(perflog->filename, 64, "%s/xperflog_%d_%d.csv", perflog->xperflog_path, thr->ts.team_id, perflog->generation);
 	// printf("filename=%s\n", perflog->filename);
 	// sprintf(perflog->filename, XPERFLOG_PATH, thr->ts.team_id, perflog->generation);
-	perflog->ts = (unsigned long long*)gomp_malloc(sizeof(unsigned long long) * XPERFLOG_MAX_EVENTS);
-	perflog->events = (xperf_type_t*)gomp_malloc(sizeof(xperf_type_t) * XPERFLOG_MAX_EVENTS);
-	perflog->samples = (unsigned long long*)gomp_malloc(sizeof(unsigned long long) * XPERFLOG_MAX_EVENTS);
+	perflog->log = (xperflog_cell_t *)gomp_malloc(sizeof(xperflog_cell_t) * XPERFLOG_MAX_EVENTS);
+	// perflog->ts = (unsigned long long*)gomp_malloc(sizeof(unsigned long long) * XPERFLOG_MAX_EVENTS);
+	// perflog->events = (xperf_type_t*)gomp_malloc(sizeof(xperf_type_t) * XPERFLOG_MAX_EVENTS);
+	// perflog->hfref = (unsigned long long*)gomp_malloc(sizeof(unsigned long long) * XPERFLOG_MAX_EVENTS);
 	
-	// init eref
-	for(int i = 0; i < XPERF_N_START_EVENTS; i++)
-		perflog->eref[i] = 0;
+	perflog->eidx = 0;
+
 	
-	xperflog_record(XPERF_THREAD_START, 0);
+	// init frame reference counters array
+	for(int i = 0; i < XPERF_N_EVENTS; i++)
+		perflog->frefc[i] = 0;
+	
+	unsigned long long tref = xperflog_get_new_fref(XPERF_THREAD);
+	xperflog_record(XPERF_THREAD, tref, tref);
 	perflog->generation++;
 }
 
-
-void xperflog_record(xperf_type_t event, unsigned long long sample){
+/** 
+ * xperflog_record - record timestamps and corresponding hfref(frame reference) number
+ * @param event: xperf_type_t, the event type, can be combination of flags, e.g.
+ * XPERF_TASK_END | XPERF_TASKWAIT means task end and then taskwait starts
+ * @param hfref: unsigned long long, the frame reference number of event with higher bits as the event type
+ * e.g. here hfref is XPERF_TASK_END's frame reference number
+ * @param lfref: unsigned long long, the frame reference number of event with lower bits as the event type
+*/
+void xperflog_record(xperf_type_t event, unsigned long long hfref, unsigned long long lfref){
 	struct gomp_thread *thr = gomp_thread();
 	struct xperflog *perflog = &thr->xperflog;
 	if(perflog->eidx >= XPERFLOG_MAX_EVENTS){
@@ -431,24 +456,17 @@ void xperflog_record(xperf_type_t event, unsigned long long sample){
 	}
 	// perflog->ts[perflog->eidx] = __rdtsc();
 	unsigned int aux;
-	perflog->ts[perflog->eidx] = __rdtscp(&aux);
-
-	if(sample){
-		perflog->events[perflog->eidx] = XPERFLOG_FLAG_SAMPLE | event;
-		perflog->samples[perflog->sidx] = sample;
-		perflog->sidx++;
-	}else{
-		perflog->events[perflog->eidx] = event;
-	}
-
+	perflog->log[perflog->eidx].ts = __rdtscp(&aux);	
+	perflog->log[perflog->eidx].event = event;
+	perflog->log[perflog->eidx].hfref = hfref;
+	perflog->log[perflog->eidx].lfref = lfref;
+	// perflog->events[perflog->eidx] = event;
+	// perflog->hfref[perflog->eidx] = hfref;
+	// perflog->frefidx++;
 	perflog->eidx++;
 }
 
-static inline unsigned long long xperflog_get_eref(xperf_type_t event){
-	struct gomp_thread *thr = gomp_thread();
-	struct xperflog *perflog = &thr->xperflog;
-	return ++perflog->eref[event];
-}
+
 
 void xperflog_wait(){
 	struct gomp_thread *thr = gomp_thread();
@@ -458,30 +476,31 @@ void xperflog_wait(){
 	int nthreads = team->nthreads;
 	while(GOMP_ATOMIC_LD_ACQ(&team->xperflog_awaited)!=nthreads && GOMP_ATOMIC_CMPXCHG(&team->xperflog_awaited, &zero, nthreads) != 1){
 		zero = 0;
-		// xtask_debug(0, 0, "here");
 	}
 }
 
 void xperflog_dump(struct gomp_thread *thr){
-	// struct gomp_thread *thr = gomp_thread();
  	struct xperflog *perflog = &thr->xperflog;
 	perflog->fp = (void *)fopen(perflog->filename, "w");
 	if(perflog->fp == NULL){
 		xtask_debug(0, 0, "xperf - dump: file pointer is null.");
 		return;
 	}
-	xperflog_record(XPERF_THREAD_END, 0);
+	xperflog_record(XPERF_THREAD_END, xperflog_get_fref(XPERF_THREAD), xperflog_get_fref(XPERF_THREAD)); // record this in href
 	// lets first do this using fprintf to output as csv file
-	fprintf(perflog->fp, "timestamp,event,sample\n");
-	unsigned long long j = 0;
+	fprintf(perflog->fp, "timestamp,event,hfref,lfref\n");
+	// unsigned long long j = 0;
+	// for(unsigned long long i = 0; i < perflog->eidx; i++){
+	// 	fprintf(perflog->fp, "%llu,%d,%llu\n", perflog->ts[i], perflog->events[i], perflog->events[i] & XPERFLOG_FLAG_SAMPLE ? perflog->hfref[j++]: 0);
+	// }
 	for(unsigned long long i = 0; i < perflog->eidx; i++){
-		fprintf(perflog->fp, "%llu,%d,%llu\n", perflog->ts[i], perflog->events[i], perflog->events[i] & XPERFLOG_FLAG_SAMPLE ? perflog->samples[j++]: 0);
+		fprintf(perflog->fp, "%llu,%d,%llu,%llu\n", perflog->log[i].ts, perflog->log[i].event, perflog->log[i].hfref, perflog->log[i].lfref);
 	}
 	fclose(perflog->fp);
 	perflog->fp = NULL;
 	// 	// fwrite(perflog->ts, sizeof(unsigned long long), perflog->eidx, perflog->fp);
 	// 	// fwrite(perflog->events, sizeof(xperf_type_t), perflog->eidx, perflog->fp);
-	// 	// fwrite(perflog->samples, sizeof(unsigned long long), perflog->sidx, perflog->fp);
+	// 	// fwrite(perflog->hfref, sizeof(unsigned long long), perflog->frefidx, perflog->fp);
 	// 	// fclose(perflog->fp);
 
 	// put a bar here
@@ -498,17 +517,17 @@ void xperflog_reset(struct gomp_thread *thr){
 		perflog->fp = NULL;
 	}
 	perflog->eidx = 0;
-	perflog->sidx = 0;
-	// init eref
-	for(int i = 0; i < XPERF_N_START_EVENTS; i++)
-		perflog->eref[i] = 0;
+	// init frefc
+	for(int i = 0; i < XPERF_N_EVENTS; i++)
+		perflog->frefc[i] = 0;
 	// xtask_debug(0, 0, "xperf - reset."); 	
 	// append tid and generation to the filename
 	// sprintf(perflog->filename, XPERFLOG_PATH, thr->ts.team_id, perflog->generation);
 	snprintf(perflog->filename, 64, "%s/xperflog_%d_%d.csv", perflog->xperflog_path, thr->ts.team_id, perflog->generation);
 	// printf("filename=%s\n", perflog->filename);
 	// perflog->fp = (void *)fopen(perflog->filename, "w");
-	xperflog_record(XPERF_THREAD_START, 0);
+	unsigned long long tref = xperflog_get_new_fref(XPERF_THREAD);
+	xperflog_record(XPERF_THREAD, tref, tref); // record this in lfref
 	perflog->generation++;
 }
 
@@ -519,7 +538,7 @@ static inline void xperflog_done(struct gomp_thread *thr){
 	// fclose(thr->xperflog.fp);
 	// free(thr->xperflog.ts);
 	// free(thr->xperflog.events);
-	// free(thr->xperflog.samples);
+	// free(thr->xperflog.hfref);
 }
 
 void xperflog_dump_reset(){
@@ -1187,8 +1206,8 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 	   long arg_size, long arg_align, bool if_clause, unsigned flags,
 	   void **depend, int priority_arg, void *detach)
 {
-	unsigned long long gomp_task_eref = xperflog_get_eref(XPERF_GOMP_TASK_START);
-	xperflog_record(XPERF_GOMP_TASK_START, gomp_task_eref);
+	unsigned long long gomp_task_fref = xperflog_get_new_fref(XPERF_THREAD);
+	xperflog_record(XPERF_GOMP_TASK, gomp_task_fref, gomp_task_fref);
   struct gomp_thread *thr = gomp_thread ();
   struct gomp_team *team = thr->ts.team;
   int priority = 0;
@@ -1435,21 +1454,20 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 			// execute it right away
 			task->kind = GOMP_TASK_TIED;
 			thr->task = task;
-			unsigned long long task_eref = xperflog_get_eref(XPERF_TASK_START);
-			xperflog_record(XPERF_TASK_START, task_eref);
+			unsigned long long task_fref = xperflog_get_new_fref(XPERF_TASK);
+			xperflog_record(XPERF_GOMP_TASK_END | XPERF_TASK, gomp_task_fref,  task_fref);
 			task->fn(task->fn_data);
-			xperflog_record(XPERF_TASK_END, task_eref);
-			xperflog_record(XPERF_GOMP_TASK_RESUME, gomp_task_eref);
-
+			xperflog_record(XPERF_TASK_END | XPERF_GOMP_TASK, task_fref, gomp_task_fref);
+			
 			thr->task = parent;
 			GOMP_ATOMIC_DEC(&task->parent->td_incomplete_child_tasks);
 			gomp_finish_task(task);
 			free(task);
-			xperflog_record(XPERF_GOMP_TASK_END, gomp_task_eref);
+			xperflog_record(XPERF_GOMP_TASK_END, gomp_task_fref, gomp_task_fref);
 			return;
 			// GOMP_ATOMIC_DEC(&team->xtask_count);
 		}
-		xperflog_record(XPERF_GOMP_TASK_END, gomp_task_eref);
+		xperflog_record(XPERF_GOMP_TASK_END, gomp_task_fref, gomp_task_fref);
 		return;
 	}else{ //!xq - begin
 #endif
@@ -2276,10 +2294,10 @@ gomp_task_run_post_remove_taskgroup (struct gomp_task *child_task)
 
 #ifdef GOMP_USE_XQUEUE
 void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
-	unsigned long long bar_eref = xperflog_get_eref(XPERF_BAR_START);
-	xperflog_record(XPERF_BAR_START, bar_eref);
+	unsigned long long bar_fref = xperflog_get_new_fref(XPERF_BAR);
+	xperflog_record(XPERF_BAR, bar_fref, bar_fref);
 	struct gomp_thread *thr = gomp_thread ();
-	struct gomp_team *team = thr->ts.team;
+	// struct gomp_team *team = thr->ts.team;
 	struct gomp_task *task = thr->task;
 	struct gomp_task *child_task = NULL;
 	struct gomp_task *to_free = NULL;
@@ -2287,9 +2305,7 @@ void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
 	unsigned long gtid = (unsigned long)omp_get_thread_num();
 	unsigned int use_own_tasks = 1, new_victim = 0;
 	unsigned long last_qid = (thr->num_queues <= gtid) ? 1 : gtid;
-	gomp_debug(100, "[tid=%d] <barrier> (xtask_barrier_handle_tasks): barrier_waiting=%d,"
-	" xtask_count=%ld, generation=%d. \n", 
-	omp_get_thread_num(), gomp_team_barrier_waiting_for_tasks (&team->barrier), team->xtask_count, team->barrier.generation);
+
 	if(gomp_barrier_last_thread(state)){
 			xflag_gathered(&thr->xflag, thr->ts.team_id == 0, state);
 		}
@@ -2332,11 +2348,10 @@ while(1){
 				}
 				}
 			else{
-				unsigned long long task_eref = xperflog_get_eref(XPERF_TASK_START);
-				xperflog_record(XPERF_TASK_START, task_eref);
+				unsigned long long task_fref = xperflog_get_new_fref(XPERF_TASK);
+				xperflog_record(XPERF_BAR_END | XPERF_TASK, bar_fref, task_fref);
 				child_task->fn (child_task->fn_data);
-				xperflog_record(XPERF_TASK_END, task_eref); // task end can be used to encapsulate the task
-				xperflog_record(XPERF_BAR_RESUME, bar_eref);
+				xperflog_record(XPERF_TASK_END | XPERF_BAR, task_fref, bar_fref); // task end can be used to encapsulate the task
 			}
 				
 			thr->task = task;
@@ -2368,7 +2383,7 @@ while(1){
 	// task source has been depeleted, set this thread's done, let the parent thread know
 	xflag_done(&thr->xflag, state);
 	if(thr->xflag.on_release){
-		xperflog_record(XPERF_BAR_END, bar_eref);
+		xperflog_record(XPERF_BAR_END, bar_fref, bar_fref);
 		return;
 	}
 		
@@ -2526,8 +2541,8 @@ gomp_barrier_handle_tasks (gomp_barrier_state_t state)
 void
 GOMP_taskwait (void)
 {
-	unsigned long long taskwait_eref = xperflog_get_eref(XPERF_TASKWAIT_START);
-	xperflog_record(XPERF_TASKWAIT_START, taskwait_eref);
+	unsigned long long taskwait_fref = xperflog_get_new_fref(XPERF_TASKWAIT);
+	xperflog_record(XPERF_TASKWAIT, taskwait_fref, taskwait_fref);
 
   struct gomp_thread *thr = gomp_thread ();
   struct gomp_team *team = thr->ts.team;
@@ -2546,7 +2561,7 @@ GOMP_taskwait (void)
 #ifdef GOMP_USE_XQUEUE
 	if(__builtin_expect(thr->use_xq, 1)){
 		if (task == NULL){
-			xperflog_record(XPERF_TASKWAIT_END, taskwait_eref);
+			xperflog_record(XPERF_TASKWAIT_END, taskwait_fref, taskwait_fref);
 			return;
 		}
 			
@@ -2645,11 +2660,10 @@ GOMP_taskwait (void)
 					}
 				}
 				else{
-					unsigned long long task_eref = xperflog_get_eref(XPERF_TASK_START);
-					xperflog_record(XPERF_TASK_START, task_eref);
+					unsigned long long task_fref = xperflog_get_new_fref(XPERF_TASK);
+					xperflog_record(XPERF_TASKWAIT_END | XPERF_TASK, taskwait_fref, task_fref);
 					child_task->fn (child_task->fn_data);
-					xperflog_record(XPERF_TASK_END, task_eref); // task end can be used to encapsulate the task
-					xperflog_record(XPERF_TASKWAIT_RESUME, taskwait_eref);
+					xperflog_record(XPERF_TASK_END | XPERF_TASKWAIT, task_fref, taskwait_fref); // task end can be used to encapsulate the task
 				}
 					
 				thr->task = task; // ww: task resumed
@@ -2694,7 +2708,7 @@ GOMP_taskwait (void)
 			gomp_sem_destroy(&taskwait.taskwait_sem);
 	
 		// record the exit of a taskwait
-		xperflog_record(XPERF_TASKWAIT_END, taskwait_eref);
+		xperflog_record(XPERF_TASKWAIT_END, taskwait_fref, taskwait_fref);
 		return;
 	}else{ // taskwait - no-xq begin
 #endif
