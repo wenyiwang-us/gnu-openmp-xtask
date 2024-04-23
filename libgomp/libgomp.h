@@ -846,21 +846,31 @@ typedef enum xperf_event_type{
 /**
  * Below is the event types with/without sample
 */
-  XPERF_TEAM_START,
-  XPERF_TEAM_END,
   XPERF_THREAD_START,
-  XPERF_THREAD_END,
   XPERF_TASK_START,
-  XPERF_TASK_END,
-  XPERF_TASKWAIT_START,
-  XPERF_TASKWAIT_END,
-  XPERF_BAR_START,
-  XPERF_BAR_END,
 
-  XPERF_GOMP_TASK_START, // timestamp the GOMP_task construct exec time
-  XPERF_GOMP_TASK_END,
+  XPERF_GOMP_TASK_START,
+  XPERF_TASKWAIT_START,
+  XPERF_BAR_START,
+  
   XPERF_TASKING_START,
+
+  XPERF_N_START_EVENTS,
+
+  XPERF_GOMP_TASK_RESUME,
+  XPERF_TASKWAIT_RESUME,
+  XPERF_BAR_RESUME,
+
+  XPERF_THREAD_END,
+  XPERF_GOMP_TASK_END,
+  XPERF_TASK_END,
+  XPERF_TASKWAIT_END,
+  XPERF_BAR_END,
   XPERF_TASKING_END,
+   // timestamp the GOMP_task construct exec time
+
+  XPERFLOG_FINAL
+  
 } xperf_type_t;
 
 
@@ -873,6 +883,7 @@ typedef struct xperflog {
   void *fp; // use void * instead of FILE * to avoid including stdio.h here
   unsigned long long *ts; // timestamp, __rdtscp or __rdtsc
   xperf_type_t *events; // event type
+  unsigned long long eref[XPERF_N_START_EVENTS]; // event refernce
   unsigned long long *samples; // samples, count or whatever
   unsigned long long eidx; // index of the log
   unsigned long long sidx; // sample index
@@ -1209,7 +1220,7 @@ extern void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs);
 #include <x86intrin.h>
 extern void xperflog_init();
 extern void xperflog_wait(); // all threads wait for current dump to finish.
-extern void xperflog_record(xperf_type_t event, long sample);
+extern void xperflog_record(xperf_type_t event, unsigned long long sample);
 extern void xperflog_dump(struct gomp_thread *thr);
 extern void xperflog_reset(struct gomp_thread *thr);
 extern void xperflog_dump_reset();
