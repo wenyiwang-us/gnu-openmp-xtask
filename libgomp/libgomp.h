@@ -73,11 +73,8 @@
 # pragma GCC visibility push(hidden)
 #endif
 #define GOMP_USE_XQUEUE 1
-// #define XTASK_ENABLE_PROF 1 // xtask enable profiling
 
-#if defined(GOMP_USE_XQUEUE) && defined(XTASK_ENABLE_PROF)
-#include <x86intrin.h>
-#endif
+
 /* If we were a C++ library, we'd get this from <std/atomic>.  */
 enum memmodel
 {
@@ -195,16 +192,6 @@ __attribute__ ((format (printf, 4, 5)))
 
 
 
-#ifdef XTASK_ENABLE_PROF
-extern void xtask_prof(int, int, const char*, const char *, ...)
-__attribute__ ((format (printf, 4, 5)))
-;
-#define xtask_prof(KIND, LEVEL, ...) \
-  do { \
-    if (__builtin_expect (gomp_debug_var, 0)) \
-      xtask_prof ((KIND), (LEVEL), __FUNCTION__, __VA_ARGS__); \
-  } while (0)
-#endif
 #endif
 
 #define gomp_vdebug(KIND, FMT, VALIST) \
@@ -859,27 +846,6 @@ typedef enum xperf_event_type{
   XPERF_GOMP_TASK_END = XPERF_GOMP_TASK << XPERF_END_SHIFT,
   XPERF_TASKWAIT_END = XPERF_TASKWAIT << XPERF_END_SHIFT,
   XPERF_BAR_END = XPERF_BAR << XPERF_END_SHIFT,
-
-  // XPERF_THREAD_START        = 0,
-  // XPERF_TASK_START          = 1,
-  // XPERF_GOMP_TASK_START     = 1 << 1,
-  // XPERF_TASKWAIT_START      = 1 << 2,
-  // XPERF_BAR_START           = 1 << 3,
-  // XPERF_TASKING_START       = 1 << 4,
-
-  // XPERF_GOMP_TASK_RESUME    = 1 << 6,
-  // XPERF_TASKWAIT_RESUME     = 1 << 7,
-  // XPERF_BAR_RESUME          = 1 << 8,
-
-  // XPERF_THREAD_END          = 1 << 9,
-  // XPERF_GOMP_TASK_END       = 1 << 10,
-  // XPERF_TASK_END            = 1 << 11,
-  // XPERF_TASKWAIT_END        = 1 << 12,
-  // XPERF_BAR_END             = 1 << 13,
-  // XPERF_TASKING_END         = 1 << 14,
-   // timestamp the GOMP_task construct exec time
-
-  // XPERFLOG_FINAL            = 1 << 15,
   
 } xperf_type_t;
 
@@ -916,46 +882,6 @@ typedef struct xperflog {
 __attribute__((aligned(64)))
 ;
 
-
-#ifdef XTASK_ENABLE_PROF
-struct xstats_data // xtask stats data
-{
-  // fine-grained stats
-  unsigned long thr_cc_start; // thread cycle count start
-  unsigned long thr_cc_end; // thread cycle count end
-  unsigned long thr_cc_pts; // thread cycle count previous count
-  unsigned long thr_cc_tasking_start; // thread enters tasking runtime
-  unsigned long thr_cc_task_total; // thread total cycle count for task execution
-  unsigned long thr_cc_idle_total; // thread total idle cycle count 
-  unsigned long thr_cc_stall;
-  unsigned long thr_cc_stall_pts; // previous timestamp
-  unsigned long thr_cc_stall_max;
-  unsigned long thr_cc_taskwait;
-  unsigned long thr_cc_barrier;
-  unsigned long thr_cc_xq_ops;
-
-  unsigned long thr_task_generated;
-  unsigned long thr_cc_new_task;
-  unsigned long thr_cc_task_max;
-  unsigned long thr_cc_task_min;
-  double thr_cc_task_avg;
-  unsigned long thr_cc_idle_max;
-  unsigned long thr_cc_idle_min;
-
-  // coarse-grained stats
-  // unsigned long thr_idx_idle_prev; // thread idle index, record previous checkpoint
-  unsigned long thr_stall_count; // thread idle index
-  
-  unsigned long team_task_count_snapshot_acc; // team task count snapshot
-  unsigned long team_task_count_snapshot_max; // team task count snapshot
-  unsigned long team_task_count_snapshot_cutoff_count;
-  unsigned long team_task_count_snapshot_min; // team task count snapshot
-  unsigned long thr_task_executed; // number of tasks executed by the threa
-
-
-  bool stalling; // thread is stalling or not
-}__attribute__((aligned(64)));
-#endif
 #endif
 
 /* This structure contains all data that is private to libgomp and is
@@ -989,9 +915,6 @@ struct gomp_thread
   bool use_xq; // use xq or not, default is yes, when incompat clauses appeared, will use default GNU tasking implementation
   struct xflag xflag;
   struct xperflog xperflog;
-#ifdef XTASK_ENABLE_PROF
-  struct xstats_data xd;
-#endif
 #endif
   /* This semaphore is used for ordered loops.  */
   gomp_sem_t release;
@@ -1246,19 +1169,6 @@ extern void xperflog_reset(struct gomp_thread *);
 extern void xperflog_dump_reset();
 
 
-#ifdef XTASK_ENABLE_PROF
-#include <x86intrin.h>
-
-extern void xstats_init();
-// extern void xstats_task_start();
-// extern void xstats_task_end();
-// extern void xstats_stall();
-// extern void xstats_new_task_start();
-// extern void xstats_new_task_end();
-extern void xstats_barrier_start();
-extern void xstats_barrier_end();
-extern void xstats_summary(int);
-#endif
 #endif
 /* team.c */
 

@@ -115,9 +115,6 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
     }
     gomp_barrier_state_t t; 
     while(1){
-      #ifdef XTASK_ENABLE_PROF
-      xstats_barrier_end();
-      #endif
       /**
        * xtask_barrier_handle_tasks returns only when all the condition meets:
        * 1. All threads have arrived at the barrier by calling gomp_team_barrier_wait, gomp_barrier_wait_start or gomp_team_barrier_wait_final once each

@@ -111,11 +111,8 @@ gomp_thread_start (void *xdata)
 	thr->use_xq = data->use_xq;
 	if(thr->use_xq && thr->td_task_q == NULL)
 	  	gomp_alloc_task_q(thr);
-	// xtask_debug(0, 0, "thread started");
 	xperflog_init();
-#ifdef XTASK_ENABLE_PROF
-	xstats_init();
-#endif 
+
 #endif
 
 
@@ -790,11 +787,6 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 			    * (nthreads - i));
 
 
-#if defined(GOMP_USE_XQUEUE) && defined(XTASK_ENABLE_PROF)
-	// master thread init stats before launching new threads for the team.
-	if(thr->use_xq)
-		xstats_init();
-#endif
 
   /* Launch new threads.  */
   for (; i < nthreads; ++i)
@@ -1024,11 +1016,6 @@ gomp_team_end (void)
     gomp_fini_work_share (thr->ts.work_share);
 
   gomp_end_task ();
-	#if defined(GOMP_USE_XQUEUE) && defined(XTASK_ENABLE_PROF)
-		if(thr->use_xq)
-			xstats_summary(2);
-  // team states changes after the following line, from observation, team_end is usually called by the GOMP_parallel_end
-	#endif
   thr->ts = team->prev_ts;
 
   if (__builtin_expect (thr->ts.level != 0, 0))
