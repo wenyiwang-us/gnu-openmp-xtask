@@ -111,9 +111,10 @@ gomp_thread_start (void *xdata)
 	thr->use_xq = data->use_xq;
 	if(thr->use_xq && thr->td_task_q == NULL)
 	  	gomp_alloc_task_q(thr);
+#ifdef GOMP_USE_XPERFLOG
 	xperflog_init();
-
-#endif
+#endif // GOMP_USE_XPERFLOG
+#endif // GOMP_USE_XQUEUE
 
 
   if (data->nested)
@@ -362,12 +363,15 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 #ifdef GOMP_USE_XQUEUE
 	// team->use_xq = true; // default to true
 	thr->use_xq = flags & 32;
-	xtask_debug(0, 0, "XTASK v.1.4, gomp_team_start!, use_xq=%d, nested=%d, level=%d\n", thr->use_xq, nested, thr->ts.level);
+	xtask_debug(0, 0, "XTASK v.1.4, gomp_team_start!, use_xq=%d, nested=%d, level=%d.", thr->use_xq, nested, thr->ts.level);
   	gomp_num_task_queues = nthreads;
   	gomp_alloc_task_q(thr);
+#ifdef GOMP_USE_XPERFLOG
+	xtask_debug(0, 0, "XPERFLOG v1 enabled.\n");
 	GOMP_ATOMIC_ST_REL(&team->xperflog_awaited, nthreads);
 	xperflog_init();
-#endif
+#endif // GOMP_USE_XPERFLOG
+#endif // GOMP_USE_XQUEUE
 
   if (__builtin_expect (gomp_places_list != NULL, 0) && thr->place == 0)
     {

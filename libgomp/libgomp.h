@@ -73,6 +73,8 @@
 # pragma GCC visibility push(hidden)
 #endif
 #define GOMP_USE_XQUEUE 1
+// #define GOMP_USE_XWS 1 // use xworkshares/workstealing
+#define GOMP_USE_XPERFLOG 1
 
 
 /* If we were a C++ library, we'd get this from <std/atomic>.  */
@@ -758,7 +760,7 @@ struct gomp_team
 
   /* This barrier is used for most synchronization of the team.  */
   gomp_barrier_t barrier;
-#ifdef GOMP_USE_XQUEUE
+#if defined(GOMP_USE_XQUEUE) && defined(GOMP_USE_XPERFLOG)
   volatile int xperflog_awaited;
 #endif
 
@@ -796,12 +798,28 @@ struct gomp_team
 #define TASK_DEQUE_MASK(td) ((td)->td_deque_size - 1)
 #define INITIAL_TASK_BITS 5
 #define INITIAL_TASK_DEQUE_SIZE (1 << INITIAL_TASK_BITS)
+/**
+ * XWS 
+ * TODO: 
+ *  XBATCH_SIZE should be a DEQUE_SIZE >> n, where n is an arbitrary number. 
+ *  Note the DEQUEU_SIZE here is the size of each queue, not the entire queues.
+ *  Enlarge my_qsize to several times bigger, my_qsize = DEQUE_SIZE * n * m
+ * 
+*/
 
 /* This structure contains task queue for xqueue implementation. */
 struct gomp_taskq{
-  volatile struct gomp_task **td_deque; // task queue
+  volatile struct gomp_task **td_deque; // task queue, an array of tasks' pointers
   unsigned int td_deque_head; // head of the queue
   unsigned int td_deque_tail; // tail of the queue
+
+// #ifdef GOMP_USE_XWS
+/**
+ * XWS related fields.
+*/
+  unsigned long long nin; // number of tasks pushed in
+  unsigned long long nout; // number of tasks popped out 
+// #endif // GOMP_USE_XWS
 };
 
 /* This structure is used for tree barreir sync, and detect barrier termination*/
@@ -824,6 +842,7 @@ struct xflag{
 }
 __attribute__((aligned(64)));
 
+#ifdef GOMP_USE_XPERFLOG
 #define XPERFLOG_MAX_EVENTS 1<<27 // 128M events
 // lets use bit 10 to indicate if the event is a sample event
 #define XPERFLOG_FLAG_SAMPLE 0x400
@@ -854,6 +873,8 @@ typedef struct xperflog_cell {
   xperf_type_t event; // event type
   unsigned long long hfref; // frame reference number for highbit event
   unsigned long long lfref; // frame reference number for lowbit event
+  unsigned long long sample; // sample
+  // unsigned int group; // group id
 } xperflog_cell_t
 __attribute__((aligned(64)));
 
@@ -865,6 +886,9 @@ typedef struct xperflog {
   unsigned long long eidx; // index of the log
   // unsigned long long frefidx; // sample index
   xperflog_cell_t *log; // log
+  unsigned int last_q;
+  unsigned long long ssum; // sample sum
+  // unsigned int cgroup; //current group
 
   char *xperflog_path;
   char filename[64]; // log file name
@@ -881,8 +905,8 @@ typedef struct xperflog {
 } xperflog_t
 __attribute__((aligned(64)))
 ;
-
-#endif
+#endif // GOMP_USE_XPERFLOG
+#endif // GOMP_USE_XQUEUE
 
 /* This structure contains all data that is private to libgomp and is
    allocated per thread.  */
@@ -914,8 +938,27 @@ struct gomp_thread
   unsigned long tl_task_queued_count;
   bool use_xq; // use xq or not, default is yes, when incompat clauses appeared, will use default GNU tasking implementation
   struct xflag xflag;
+
+#ifdef GOMP_USE_XWS
+  /**
+   * XWS related fields.
+   * Need cache& cachline optimization
+   * May need redesign a new data structure xq so the q ops don't go through the cache
+   * Further implementation can try
+  */
+ unsigned int ws_lock; // simple test-and-set implementation of shared_q lock
+ unsigned int *wl_idxes; // an array of workload indexes
+ unsigned long long nqops; // number of queue operations
+ unsigned int wlb_failed_attampts; // number of workload balance attempts
+ unsigned int ws_failed_attampts; // number of failed ws attempts
+ unsigned int wl_idx_high;
+  unsigned int wl_idx_low;
+#endif // GOMP_USE_XWS
+
+#ifdef GOMP_USE_XPERFLOG
   struct xperflog xperflog;
-#endif
+#endif // GOMP_USE_XPERFLOG
+#endif // GOMP_USE_XQUEUE
   /* This semaphore is used for ordered loops.  */
   gomp_sem_t release;
 
@@ -1160,6 +1203,7 @@ extern void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs);
 // extern void xflag_build_tree(struct xflag *, int, int);
 // extern void xflag_optimize_tree(struct xflag *);
 
+#ifdef GOMP_USE_XPERFLOG
 #include <x86intrin.h>
 extern void xperflog_init();
 extern void xperflog_wait(); // all threads wait for current dump to finish.
@@ -1167,9 +1211,9 @@ extern void xperflog_record(xperf_type_t, unsigned long long, unsigned long long
 extern void xperflog_dump(struct gomp_thread *);
 extern void xperflog_reset(struct gomp_thread *);
 extern void xperflog_dump_reset();
+#endif // GOMP_USE_XPERFLOG
 
-
-#endif
+#endif // GOMP_USE_XQUEUE
 /* team.c */
 
 extern struct gomp_team *gomp_new_team (unsigned);

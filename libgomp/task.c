@@ -61,6 +61,36 @@ htab_eq (hash_entry_type x, hash_entry_type y)
 }
 
 #ifdef GOMP_USE_XQUEUE
+#ifdef GOMP_USE_XWS
+
+
+#define QOPS_MASK (1<<10) - 1 //mask
+#define MAX_BALANCE_ATTEMPTS 10
+#define XWS_BATCH_SIZE 32
+#define XWS_SQ_SIZE INITIAL_TASK_DEQUE_SIZE<<2  /*just try 4 batches*/
+/**
+ * WL_INDEX_HIGH - workload index is high
+ * WL_INDEX_LOW - workload index is low
+*/
+#define WL_INDEX_HIGH (INITIAL_TASK_DEQUE_SIZE >> 1)
+#define WL_INDEX_LOW (INITIAL_TASK_DEQUE_SIZE >> (INITIAL_TASK_BITS/2)) // is this even allowd?
+enum {
+	XWS_BALANCE_IGNORED,
+	XWS_BALANCE_SUCCESS,
+	XWS_BALANCE_FAILED,
+	XWS_BALANCE_SQ_EMPTY,
+};
+
+
+#endif // GOMP_USE_XWS
+
+// declare the functions
+void gomp_alloc_task_q(struct gomp_thread *);
+static int gomp_push_task(struct gomp_task *);
+static gomp_task_t* gomp_remove_my_task();
+static gomp_task_t* gomp_remove_aux_task(unsigned long *);
+
+
 void
 gomp_alloc_task_q(struct gomp_thread *thr){
 	if (thr->num_queues == 0)
@@ -69,24 +99,155 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	thr->last_q = 0;
 	thr->last_q_accessed = 0;
 	
-	thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * thr->num_queues);
-	for (int queue_id = 0; queue_id < thr->num_queues; queue_id++){
-		thr->td_task_q[queue_id] = (struct gomp_taskq *)gomp_malloc(sizeof(struct gomp_taskq));
-		thr->td_task_q[queue_id]->td_deque = (volatile struct gomp_task **)gomp_malloc(sizeof(struct gomp_task *) * INITIAL_TASK_DEQUE_SIZE);
-		thr->td_deque_size = INITIAL_TASK_DEQUE_SIZE;
+	// thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * thr->num_queues);
+	thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * (thr->num_queues + 1)); // with xws
+	for (int queue_id = 0; queue_id < thr->num_queues + 1; queue_id++){
+		#ifdef GOMP_USE_XWS
+		if(queue_id == 0 || queue_id == thr->num_queues){
+			thr->td_task_q[queue_id] = (struct gomp_taskq *)gomp_malloc(sizeof(struct gomp_taskq));
+			thr->td_task_q[queue_id]->td_deque = (volatile struct gomp_task **)gomp_malloc(sizeof(struct gomp_task *) * XWS_SQ_SIZE);
+			thr->td_task_q[queue_id]->td_deque_head = 0;
+			thr->td_task_q[queue_id]->td_deque_tail = 0;
+			thr->td_task_q[queue_id]->nin = 0;
+			thr->td_task_q[queue_id]->nout = 0;
+			thr->td_task_q[queue_id]->td_deque_size = XWS_SQ_SIZE;
+			for(int i = 0; i < thr->td_task_q[queue_id]->td_deque_size; i++){
+				thr->td_task_q[queue_id]->td_deque[i] = NULL;
+			}
+		}else{
+		#endif // GOMP_USE_XWS
+			thr->td_task_q[queue_id] = (struct gomp_taskq *)gomp_malloc(sizeof(struct gomp_taskq));
+			thr->td_task_q[queue_id]->td_deque = (volatile struct gomp_task **)gomp_malloc(sizeof(struct gomp_task *) * INITIAL_TASK_DEQUE_SIZE);
+			thr->td_deque_size = INITIAL_TASK_DEQUE_SIZE;
 
-		//wenyi: in kmp, these two are assertions
-		thr->td_task_q[queue_id]->td_deque_head = 0;
-		thr->td_task_q[queue_id]->td_deque_tail = 0;
-		for(int i = 0; i < thr->td_deque_size; i++){
-			thr->td_task_q[queue_id]->td_deque[i] = NULL;
+			//wenyi: in kmp, these two are assertions
+			thr->td_task_q[queue_id]->td_deque_head = 0;
+			thr->td_task_q[queue_id]->td_deque_tail = 0;
+
+			// #ifdef GOMP_USE_XWS
+			thr->td_task_q[queue_id]->nin = 0;
+			thr->td_task_q[queue_id]->nout = 0;
+			// #endif // GOMP_USE_XWS
+
+			for(int i = 0; i < thr->td_deque_size; i++){
+				thr->td_task_q[queue_id]->td_deque[i] = NULL;
+			}
+		#ifdef GOMP_USE_XWS
 		}
+		#endif // GOMP_USE_XWS
+		
 	}
+/**
+ * XWS - XWorkStealing
+*/
+#ifdef GOMP_USE_XWS
+	thr->nqops = 0;
+	thr->wlb_failed_attampts = 0;
+	thr->ws_failed_attampts = 0;
+	thr->wl_idx_high = thr->num_queues * WL_INDEX_HIGH;
+	thr->wl_idx_low = thr->num_queues * WL_INDEX_LOW;
+	thr->wl_idxes = (unsigned long *)gomp_malloc(sizeof(unsigned long) * thr->num_queues);
+	memset(thr->wl_idxes, 0, sizeof(unsigned long) * thr->num_queues);
+	GOMP_ATOMIC_ST_RLX(&thr->ws_lock, 0);
+#endif // GOMP_USE_XWS
 	return;
 };
 
-void
-gomp_free_task_q();
+#ifdef GOMP_USE_XWS
+static inline unsigned int get_workload_index(){
+	struct gomp_thread *thr = gomp_thread();
+	unsigned int idx = 0;
+	for(int i = 0; i < thr->num_queues; i++){
+		idx += thr->td_task_q[i]->nin - thr->td_task_q[i]->nout;
+	}
+	return idx;
+}
+
+/**
+ * XWS - XWorkStealing
+ * Try to lock the shared q
+ * @return true if the lock is successful, false otherwise.
+*/
+static inline bool sq_try_lock(unsigned int *lock){
+	struct gomp_thread *thr = gomp_thread();
+	int tid = thr->ts.team_id;
+	int zero = 0; //TODO: Maybe simpiler implementation? according to the doc, it will change the expect val, which is weird
+	return GOMP_ATOMIC_CMPXCHG(lock, &zero, tid); // lock by me from state 0 
+}
+/**
+ * XWS - XWorkStealing
+ * unlock the shared q
+ * @return true if the unlock is successful, false otherwise.
+*/
+static inline bool sq_unlock(unsigned int *lock){
+	struct gomp_thread *thr = gomp_thread();
+	int tid = thr->ts.team_id;
+	return GOMP_ATOMIC_CMPXCHG(lock, &tid, 0); // unlock by me from state tid
+}
+/**
+ * XWS - XWorkStealing
+ * lock the shared q: wait until the lock is successful
+*/
+static inline void sq_lock(unsigned int *lock){
+	struct gomp_thread *thr = gomp_thread();
+	int tid = thr->ts.team_id;
+	int zero = 0;
+	while(GOMP_ATOMIC_CMPXCHG(lock, &zero, tid) != 0){
+		zero = 0;
+	}
+}
+
+/**
+ * Move tasks to the shared q
+ * if the shared q is full, return. It is ok to read shared var outside of the lock, since it is estimation
+ * moving from my q to shared q don't need to be protected by the lock, as it is a single producer multiple consumers.
+ * only lock when consume
+*/
+static inline int tosq(){
+	struct gomp_thread *thr = gomp_thread();
+	// TODO: push a batch of tasks to the the shared q
+}
+
+/**
+ * Move tasks from the shared q
+ * This is called when load is low and the shared q is not empty
+*/
+static inline int fromsq(){
+	struct gomp_thread *thr = gomp_thread();
+	// check the workload indx
+	// try lock the sq
+	bool ret = sq_try_lock(&thr->sq_lock);
+	if(!ret){
+		if(++thr->ws_failed_attampts > MAX_BALANCE_ATTEMPTS){
+			thr->ws_failed_attampts = 0;
+			sq_lock(&thr->sq_lock);
+		}else{
+			return XWS_BALANCE_IGNORED;
+		}
+	}
+}
+
+/**
+ * XWS - XWorkStealing
+ * Balance the xq and sq in current thread if certain condition is met.
+ * First check if it is the right interval to balance
+ * Then check the wl_idx, if wl_idx is high or low, balance the queues
+ * @return 1 if the balance is successful, 0 otherwise.
+*/
+static inline int balance_sq(){
+	struct gomp_thread *thr = gomp_thread();
+	if(__builtin_expect(!(thr->nqops & QOPS_MASK), 1))
+		return XWS_BALANCE_IGNORED;
+	int gtid = thr->ts.team_id;
+	// update my workload index
+	thr->wl_idxes[gtid] = get_workload_index();
+	// check the wl_idx,
+	if(thr->wl_idxes[gtid] > thr->wl_idx_high)
+
+
+}
+#endif // GOMP_USE_XWS
+
 
 static int
 gomp_push_task(struct gomp_task *task){
@@ -128,6 +289,16 @@ gomp_push_task(struct gomp_task *task){
 	task_q->td_deque_head = (task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
 	target_thr->last_q_accessed = last_q;
 
+
+	task_q->nin++;
+	#ifdef GOMP_USE_XWS
+	thr->nqops++;
+	/**
+	 * The following is only an estimate, 
+	*/
+	target_thr->wl_idxes[thr->ts.team_id] = thr->wl_idxes[thr->ts.team_id] + 1;
+	#endif // GOMP_USE_XWS
+
 	if (thr->num_queues > 1){
 		last_q++;
 		if (last_q < thr->num_queues)
@@ -153,7 +324,7 @@ gomp_remove_my_task(){
 	thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_tail] = NULL;
 	thr->td_task_q[0]->td_deque_tail = (thr->td_task_q[0]->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
 	// wenyi: in kmp, there is a conversion from task to taskdata
-
+	thr->td_task_q[0]->nout++;
 	return task;
 };
 
@@ -166,9 +337,9 @@ gomp_remove_aux_task(unsigned long *last_qid){
 	if(!thr->num_queues)
 		gomp_alloc_task_q(thr);
 	task = NULL;
-
+	struct gomp_taskq *task_q= NULL;
 	if(thr->last_q_accessed > 0){
-		struct gomp_taskq *task_q = thr->td_task_q[thr->last_q_accessed];
+		task_q = thr->td_task_q[thr->last_q_accessed];
 		if (task_q->td_deque[task_q->td_deque_tail] != NULL){
 			task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
 			task_q->td_deque[task_q->td_deque_tail] = NULL;
@@ -180,7 +351,7 @@ gomp_remove_aux_task(unsigned long *last_qid){
 	}
 	if(task == NULL){
 		for(unsigned long queue_id = *last_qid; queue_id > 0; queue_id --){
-			struct gomp_taskq *task_q = thr->td_task_q[queue_id];
+			task_q = thr->td_task_q[queue_id];
 			if (task_q->td_deque[task_q->td_deque_tail] != NULL){
 				task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
 				task_q->td_deque[task_q->td_deque_tail] = NULL;
@@ -194,7 +365,7 @@ gomp_remove_aux_task(unsigned long *last_qid){
 
 	if(task == NULL){
 		for(unsigned long queue_id = thr->num_queues - 1; queue_id > *last_qid; queue_id --){
-			struct gomp_taskq *task_q = thr->td_task_q[queue_id];
+			task_q = thr->td_task_q[queue_id];
 			if (task_q->td_deque[task_q->td_deque_tail] != NULL){
 				task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
 				task_q->td_deque[task_q->td_deque_tail] = NULL;
@@ -211,8 +382,14 @@ gomp_remove_aux_task(unsigned long *last_qid){
 	if(task == NULL){
 		return NULL;
 	}
+	task_q->nout++;
 	return task;
 };
+
+/**
+ * Work-stealing algorithm for task scheduling.
+ * This is called by the worker threads to steal tasks from other threads.
+*/
 
 
 /** author: ww
@@ -355,6 +532,7 @@ static void xflag_done(struct xflag * flag, gomp_barrier_state_t bs){
 /**
  * XPerflog - record timestamps and corresponding hfref number
 */
+#ifdef GOMP_USE_XPERFLOG
 #include <stdio.h>
 #define XPERFLOG_PATH "/stor/auxiliary/wwang/xperlog/tmp/xperflog_%d_%d.csv"
 
@@ -384,6 +562,7 @@ void xperflog_init(){
 	snprintf(perflog->filename, 64, "%s/xperflog_%d_%d.csv", perflog->xperflog_path, thr->ts.team_id, perflog->generation);
 	perflog->log = (xperflog_cell_t *)gomp_malloc(sizeof(xperflog_cell_t) * XPERFLOG_MAX_EVENTS);
 	perflog->eidx = 0;
+	perflog->last_q = 0;
 
 	
 	// init frame reference counters array
@@ -416,6 +595,18 @@ void xperflog_record(xperf_type_t event, unsigned long long hfref, unsigned long
 	perflog->log[perflog->eidx].event = event;
 	perflog->log[perflog->eidx].hfref = hfref;
 	perflog->log[perflog->eidx].lfref = lfref;
+	// record sample task count
+	// unsigned long long sample = 0;
+	if(event > XPERF_THREAD){
+		// for(int i = 0; i < 4; i++){
+			// perflog->last_q = perflog->last_q + i < thr->num_queues ? perflog->last_q + i : (perflog->last_q + i) % thr->num_queues;
+			// xtask_debug(0, 0, "xperf - record: last_q=%d, num_queues=%d", perflog->last_q, thr->num_queues);
+			perflog->ssum +=(unsigned long long)(thr->td_task_q[perflog->last_q]->nin - thr->td_task_q[perflog->last_q]->nout);
+			perflog->last_q = perflog->last_q + 1 >= thr->num_queues ? 0 : perflog->last_q + 1;
+		// }
+		perflog->log[perflog->eidx].sample = perflog->ssum;
+	}
+
 	perflog->eidx++;
 }
 
@@ -442,10 +633,16 @@ void xperflog_dump(struct gomp_thread *thr){
 	xperflog_record(XPERF_THREAD_END, xperflog_get_fref(XPERF_THREAD), xperflog_get_fref(XPERF_THREAD)); // record this in href
 
 	// lets first do this using fprintf to output as csv file
-	fprintf(perflog->fp, "timestamp,event,hfref,lfref\n");
+	fprintf(perflog->fp, "timestamp,event,hfref,lfref,sample\n");
 	for(unsigned long long i = 0; i < perflog->eidx; i++){
-		fprintf(perflog->fp, "%llu,%d,%llu,%llu\n", perflog->log[i].ts, perflog->log[i].event, perflog->log[i].hfref, perflog->log[i].lfref);
+		fprintf(perflog->fp, "%llu,%d,%llu,%llu,%llu\n", 
+		perflog->log[i].ts, 
+		perflog->log[i].event, 
+		perflog->log[i].hfref, 
+		perflog->log[i].lfref,  
+		perflog->log[i].sample);
 	}
+
 	fclose(perflog->fp);
 	perflog->fp = NULL;
 
@@ -468,6 +665,7 @@ void xperflog_reset(struct gomp_thread *thr){
 		perflog->fp = NULL;
 	}
 	perflog->eidx = 0;
+	perflog->last_q = 0;
 	// init frefc
 	for(int i = 0; i < XPERF_N_EVENTS; i++)
 		perflog->frefc[i] = 0;
@@ -495,7 +693,7 @@ void xperflog_dump_reset(){
 	xperflog_reset(thr);
 	// xperflog_done(thr);
 }
-
+#endif // GOMP_USE_XPERFLOG
 #endif // GOMP_USE_XQUEUE
 
 /* Create a new task data structure.  */
@@ -793,8 +991,10 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 	   long arg_size, long arg_align, bool if_clause, unsigned flags,
 	   void **depend, int priority_arg, void *detach)
 {
+#if defined(GOMP_USE_XPERFLOG) && defined(GOMP_USE_XQUEUE)
 	unsigned long long gomp_task_fref = xperflog_get_new_fref(XPERF_THREAD);
 	xperflog_record(XPERF_GOMP_TASK, gomp_task_fref, gomp_task_fref);
+#endif // GOMP_USE_XPERFLOG
   struct gomp_thread *thr = gomp_thread ();
   struct gomp_team *team = thr->ts.team;
   int priority = 0;
@@ -1041,20 +1241,26 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 			// execute it right away
 			task->kind = GOMP_TASK_TIED;
 			thr->task = task;
+			#ifdef GOMP_USE_XPERFLOG
 			unsigned long long task_fref = xperflog_get_new_fref(XPERF_TASK);
 			xperflog_record(XPERF_GOMP_TASK_END | XPERF_TASK, gomp_task_fref,  task_fref);
+			#endif // GOMP_USE_XPERFLOG
 			task->fn(task->fn_data);
+			#ifdef GOMP_USE_XPERFLOG
 			xperflog_record(XPERF_TASK_END | XPERF_GOMP_TASK, task_fref, gomp_task_fref);
-			
+			#endif // GOMP_USE_XPERFLOG
 			thr->task = parent;
 			GOMP_ATOMIC_DEC(&task->parent->td_incomplete_child_tasks);
 			gomp_finish_task(task);
 			free(task);
+			#ifdef GOMP_USE_XPERFLOG
 			xperflog_record(XPERF_GOMP_TASK_END, gomp_task_fref, gomp_task_fref);
+			#endif // GOMP_USE_XPERFLOG
 			return;
-			// GOMP_ATOMIC_DEC(&team->xtask_count);
 		}
+		#ifdef GOMP_USE_XPERFLOG
 		xperflog_record(XPERF_GOMP_TASK_END, gomp_task_fref, gomp_task_fref);
+		#endif // GOMP_USE_XPERFLOG
 		return;
 	}else{ //!xq - begin
 #endif
@@ -1881,8 +2087,10 @@ gomp_task_run_post_remove_taskgroup (struct gomp_task *child_task)
 
 #ifdef GOMP_USE_XQUEUE
 void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
+	#if defined(GOMP_USE_XQUEUE) && defined(GOMP_USE_XPERFLOG)
 	unsigned long long bar_fref = xperflog_get_new_fref(XPERF_BAR);
 	xperflog_record(XPERF_BAR, bar_fref, bar_fref);
+	#endif // GOMP_USE_XQUEUE && GOMP_USE_XPERFLOG
 	struct gomp_thread *thr = gomp_thread ();
 	// struct gomp_team *team = thr->ts.team;
 	struct gomp_task *task = thr->task;
@@ -1935,10 +2143,14 @@ while(1){
 				}
 				}
 			else{
+				#ifdef GOMP_USE_XPERFLOG
 				unsigned long long task_fref = xperflog_get_new_fref(XPERF_TASK);
 				xperflog_record(XPERF_BAR_END | XPERF_TASK, bar_fref, task_fref);
+				#endif // GOMP_USE_XPERFLOG
 				child_task->fn (child_task->fn_data);
+				#ifdef GOMP_USE_XPERFLOG
 				xperflog_record(XPERF_TASK_END | XPERF_BAR, task_fref, bar_fref); // task end can be used to encapsulate the task
+				#endif // GOMP_USE_XPERFLOG
 			}
 				
 			thr->task = task;
@@ -1970,7 +2182,9 @@ while(1){
 	// task source has been depeleted, set this thread's done, let the parent thread know
 	xflag_done(&thr->xflag, state);
 	if(thr->xflag.on_release){
+		#ifdef GOMP_USE_XPERFLOG
 		xperflog_record(XPERF_BAR_END, bar_fref, bar_fref);
+		#endif // GOMP_USE_XPERFLOG
 		return;
 	}
 		
@@ -2128,8 +2342,10 @@ gomp_barrier_handle_tasks (gomp_barrier_state_t state)
 void
 GOMP_taskwait (void)
 {
+	#if defined(GOMP_USE_XQUEUE) && defined(GOMP_USE_XPERFLOG)
 	unsigned long long taskwait_fref = xperflog_get_new_fref(XPERF_TASKWAIT);
 	xperflog_record(XPERF_TASKWAIT, taskwait_fref, taskwait_fref);
+	#endif // GOMP_USE_XQUEUE && GOMP_USE_XPERFLOG
 
   struct gomp_thread *thr = gomp_thread ();
   struct gomp_team *team = thr->ts.team;
@@ -2148,7 +2364,9 @@ GOMP_taskwait (void)
 #ifdef GOMP_USE_XQUEUE
 	if(__builtin_expect(thr->use_xq, 1)){
 		if (task == NULL){
+			#ifdef GOMP_USE_XPERFLOG
 			xperflog_record(XPERF_TASKWAIT_END, taskwait_fref, taskwait_fref);
+			#endif // GOMP_USE_XPERFLOG
 			return;
 		}
 			
@@ -2236,10 +2454,14 @@ GOMP_taskwait (void)
 					}
 				}
 				else{
+					#ifdef GOMP_USE_XPERFLOG
 					unsigned long long task_fref = xperflog_get_new_fref(XPERF_TASK);
 					xperflog_record(XPERF_TASKWAIT_END | XPERF_TASK, taskwait_fref, task_fref);
+					#endif // GOMP_USE_XPERFLOG
 					child_task->fn (child_task->fn_data);
+					#ifdef GOMP_USE_XPERFLOG
 					xperflog_record(XPERF_TASK_END | XPERF_TASKWAIT, task_fref, taskwait_fref); // task end can be used to encapsulate the task
+					#endif // GOMP_USE_XPERFLOG
 				}
 					
 				thr->task = task; // ww: task resumed
@@ -2284,10 +2506,12 @@ GOMP_taskwait (void)
 			gomp_sem_destroy(&taskwait.taskwait_sem);
 	
 		// record the exit of a taskwait
+		#ifdef GOMP_USE_XPERFLOG
 		xperflog_record(XPERF_TASKWAIT_END, taskwait_fref, taskwait_fref);
+		#endif // GOMP_USE_XPERFLOG
 		return;
 	}else{ // taskwait - no-xq begin
-#endif
+#endif // GOMP_USE_XQUEUE
 
   gomp_mutex_lock (&team->task_lock);
   while (1)
