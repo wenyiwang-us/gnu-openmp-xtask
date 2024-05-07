@@ -843,10 +843,9 @@ struct xflag{
 __attribute__((aligned(64)));
 
 #ifdef GOMP_USE_XPERFLOG
-#define XPERFLOG_MAX_EVENTS 1<<27 // 128M events
+#define XPERFLOG_MAX_EVENTS 1<<27 // 128MB events
 // lets use bit 10 to indicate if the event is a sample event
-#define XPERFLOG_FLAG_SAMPLE 0x400
-#define XPERF_END_SHIFT 4
+#define XPERF_END_SHIFT 5
 typedef enum xperf_event_type{
 /**
  * Below is the event types with/without sample
@@ -857,6 +856,7 @@ typedef enum xperf_event_type{
   XPERF_GOMP_TASK,
   XPERF_TASKWAIT,
   XPERF_BAR, // 0b101
+  XPERF_DUMP, // 0b110
 
   XPERF_N_EVENTS,
 
@@ -865,6 +865,7 @@ typedef enum xperf_event_type{
   XPERF_GOMP_TASK_END = XPERF_GOMP_TASK << XPERF_END_SHIFT,
   XPERF_TASKWAIT_END = XPERF_TASKWAIT << XPERF_END_SHIFT,
   XPERF_BAR_END = XPERF_BAR << XPERF_END_SHIFT,
+  XPERF_DUMP_END = XPERF_DUMP << XPERF_END_SHIFT,
   
 } xperf_type_t;
 

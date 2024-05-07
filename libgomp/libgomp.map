@@ -226,6 +226,13 @@ OMP_5.1 {
 	omp_get_teams_thread_limit_;
 } OMP_5.0.2;
 
+# xtask-omp
+XOMP_1.0 {
+	global:
+		xomp_perflog_info;
+		xomp_perflog_dump;
+};
+
 GOMP_1.0 {
   global:
 	GOMP_atomic_end;

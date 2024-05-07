@@ -432,6 +432,7 @@ void xflag_init(struct gomp_thread *thr){
 */
 
 void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs){
+	// xtask_debug(0, 1, "xflag_reinit, tid=%d, bs=%d", thr->ts.team_id, bs);
 	struct xflag *flag = &thr->xflag;
 	flag->state = XFLAG_STATE_RUNNING;
 	flag->gathered = bs;
@@ -622,15 +623,22 @@ void xperflog_wait(){
 		zero = 0;
 	}
 }
+/**
+ * Now this should be called by the users with the wrapper
+ * And it has to be called under the omp parallel region
+*/
 
 void xperflog_dump(struct gomp_thread *thr){
+	// xtask_debug(0, 0, "dumping");
+	// the following is a bit anti-pattern.
+	xperflog_record(XPERF_THREAD_END | XPERF_DUMP, xperflog_get_fref(XPERF_THREAD), xperflog_get_fref(XPERF_DUMP)); // record this in href
+
  	struct xperflog *perflog = &thr->xperflog;
 	perflog->fp = (void *)fopen(perflog->filename, "w");
 	if(perflog->fp == NULL){
 		xtask_debug(0, 0, "xperf - dump: file pointer is null.");
 		return;
 	}
-	xperflog_record(XPERF_THREAD_END, xperflog_get_fref(XPERF_THREAD), xperflog_get_fref(XPERF_THREAD)); // record this in href
 
 	// lets first do this using fprintf to output as csv file
 	fprintf(perflog->fp, "timestamp,event,hfref,lfref,sample\n");
@@ -652,7 +660,7 @@ void xperflog_dump(struct gomp_thread *thr){
 	// 	// fwrite(perflog->hfref, sizeof(unsigned long long), perflog->frefidx, perflog->fp);
 	// 	// fclose(perflog->fp);
 	// put a bar here
-	xperflog_wait();
+	// xperflog_wait();
 }
 
 /**
@@ -692,6 +700,26 @@ void xperflog_dump_reset(){
 	xperflog_dump(thr);
 	xperflog_reset(thr);
 	// xperflog_done(thr);
+}
+
+/**
+ * Interfaces that can be called by the user
+ * xomp_perflog_dump: dump the perflog to the file
+ * xomp_perflog_reset: reset the perflog
+*/
+
+void xomp_perflog_dump(void){
+	struct gomp_thread *thr = gomp_thread();
+	xperflog_dump(thr);
+}
+
+void xomp_perflog_info(void){
+	struct gomp_thread *thr = gomp_thread();
+	struct xperflog *perflog = &thr->xperflog;
+	xtask_debug(0, 0, 
+		"xperflog - info: tid=%d, eidx=%llu, last_q=%d, generation=%d, xperflog_path=%s, filename=%s",
+		thr->ts.team_id, perflog->eidx, perflog->last_q, perflog->generation, perflog->xperflog_path, perflog->filename
+	);
 }
 #endif // GOMP_USE_XPERFLOG
 #endif // GOMP_USE_XQUEUE
@@ -3508,3 +3536,4 @@ omp_fulfill_event (omp_event_handle_t event)
 }
 
 ialias (omp_fulfill_event)
+ialias (xomp_perflog_info)

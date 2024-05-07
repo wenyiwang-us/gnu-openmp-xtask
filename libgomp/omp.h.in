@@ -328,6 +328,12 @@ extern void *omp_realloc (void *, __SIZE_TYPE__,
 
 extern void omp_display_env (int) __GOMP_NOTHROW;
 
+/**
+ * XTask Performance Logging API
+*/
+extern void xomp_perflog_info(void) __GOMP_NOTHROW;
+extern void xomp_perflog_dump(void) __GOMP_NOTHROW;
+
 #ifdef __cplusplus
 }
 #endif

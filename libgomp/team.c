@@ -362,7 +362,8 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 
 #ifdef GOMP_USE_XQUEUE
 	// team->use_xq = true; // default to true
-	thr->use_xq = flags & 32;
+	// thr->use_xq = flags & 32;
+	thr->use_xq = 1;
 	xtask_debug(0, 0, "XTASK v.1.4, gomp_team_start!, use_xq=%d, nested=%d, level=%d.", thr->use_xq, nested, thr->ts.level);
   	gomp_num_task_queues = nthreads;
   	gomp_alloc_task_q(thr);

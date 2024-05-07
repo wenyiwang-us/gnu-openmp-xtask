@@ -160,7 +160,7 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
     xflag_reinit(thr, state);
    
   #ifdef GOMP_USE_XPERFLOG
-    xperflog_dump_reset();
+    // xperflog_dump_reset();
   #endif // GOMP_USE_XPERFLOG
     return;
   }else{ // if not using xq
