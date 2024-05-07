@@ -846,6 +846,8 @@ __attribute__((aligned(64)));
 #define XPERFLOG_MAX_EVENTS 1<<27 // 128MB events
 // lets use bit 10 to indicate if the event is a sample event
 #define XPERF_END_SHIFT 5
+#define LEVENT(a) ((a)&((1 << XPERF_END_SHIFT) - 1))
+#define HEVENT(a) ((a)>> XPERF_END_SHIFT)
 typedef enum xperf_event_type{
 /**
  * Below is the event types with/without sample
@@ -855,8 +857,10 @@ typedef enum xperf_event_type{
   XPERF_TASK,
   XPERF_GOMP_TASK,
   XPERF_TASKWAIT,
-  XPERF_BAR, // 0b101
-  XPERF_DUMP, // 0b110
+  XPERF_BAR, 
+  XPERF_STALL,
+  XPERF_DUMP,
+  
 
   XPERF_N_EVENTS,
 
@@ -865,7 +869,9 @@ typedef enum xperf_event_type{
   XPERF_GOMP_TASK_END = XPERF_GOMP_TASK << XPERF_END_SHIFT,
   XPERF_TASKWAIT_END = XPERF_TASKWAIT << XPERF_END_SHIFT,
   XPERF_BAR_END = XPERF_BAR << XPERF_END_SHIFT,
+  XPERF_STALL_END = XPERF_STALL << XPERF_END_SHIFT,
   XPERF_DUMP_END = XPERF_DUMP << XPERF_END_SHIFT,
+  
   
 } xperf_type_t;
 
@@ -874,7 +880,7 @@ typedef struct xperflog_cell {
   xperf_type_t event; // event type
   unsigned long long hfref; // frame reference number for highbit event
   unsigned long long lfref; // frame reference number for lowbit event
-  unsigned long long sample; // sample
+  long long sample; // sample
   // unsigned int group; // group id
 } xperflog_cell_t
 __attribute__((aligned(64)));
@@ -888,7 +894,7 @@ typedef struct xperflog {
   // unsigned long long frefidx; // sample index
   xperflog_cell_t *log; // log
   unsigned int last_q;
-  unsigned long long ssum; // sample sum
+  long long ssum; // sample sum
   // unsigned int cgroup; //current group
 
   char *xperflog_path;
@@ -902,6 +908,7 @@ typedef struct xperflog {
   // redundent // unsigned long counter[XPERF_N_COUNTERS]; // counters
   int tid; // thread id
   int generation;
+  bool is_stalling; // is stalling
   // should flush then reinit after each team barrier
 } xperflog_t
 __attribute__((aligned(64)))

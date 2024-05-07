@@ -391,6 +391,19 @@ gomp_remove_aux_task(unsigned long *last_qid){
  * This is called by the worker threads to steal tasks from other threads.
 */
 
+static inline int xws_send_steal_requests(){
+
+	return 0;
+}
+static inline int xws_check_response(){
+	return 0;
+}
+
+static inline int xws_handle_steal_requests(){
+	return 0;
+}
+
+
 
 /** author: ww
  * xflag_init has to be called after thread_dock, before the threads running actual tasks,
@@ -564,6 +577,7 @@ void xperflog_init(){
 	perflog->log = (xperflog_cell_t *)gomp_malloc(sizeof(xperflog_cell_t) * XPERFLOG_MAX_EVENTS);
 	perflog->eidx = 0;
 	perflog->last_q = 0;
+	perflog->is_stalling = false;
 
 	
 	// init frame reference counters array
@@ -590,6 +604,19 @@ void xperflog_record(xperf_type_t event, unsigned long long hfref, unsigned long
 		xtask_debug(0, 0, "xperf - record: idx exceeds max events.");
 		return;
 	}
+
+	if(LEVENT(event) == XPERF_STALL && perflog->is_stalling)
+		return;
+
+	if(HEVENT(event) == XPERF_STALL_END && !perflog->is_stalling)
+		return;
+
+	if(LEVENT(event) == XPERF_STALL)
+		perflog->is_stalling = true;
+	else
+		perflog->is_stalling = false;
+
+
 	// perflog->ts[perflog->eidx] = __rdtsc();
 	unsigned int aux;
 	perflog->log[perflog->eidx].ts = __rdtscp(&aux);	
@@ -602,7 +629,7 @@ void xperflog_record(xperf_type_t event, unsigned long long hfref, unsigned long
 		// for(int i = 0; i < 4; i++){
 			// perflog->last_q = perflog->last_q + i < thr->num_queues ? perflog->last_q + i : (perflog->last_q + i) % thr->num_queues;
 			// xtask_debug(0, 0, "xperf - record: last_q=%d, num_queues=%d", perflog->last_q, thr->num_queues);
-			perflog->ssum +=(unsigned long long)(thr->td_task_q[perflog->last_q]->nin - thr->td_task_q[perflog->last_q]->nout);
+			perflog->ssum +=(long long)(thr->td_task_q[perflog->last_q]->nin - thr->td_task_q[perflog->last_q]->nout);
 			perflog->last_q = perflog->last_q + 1 >= thr->num_queues ? 0 : perflog->last_q + 1;
 		// }
 		perflog->log[perflog->eidx].sample = perflog->ssum;
@@ -643,7 +670,7 @@ void xperflog_dump(struct gomp_thread *thr){
 	// lets first do this using fprintf to output as csv file
 	fprintf(perflog->fp, "timestamp,event,hfref,lfref,sample\n");
 	for(unsigned long long i = 0; i < perflog->eidx; i++){
-		fprintf(perflog->fp, "%llu,%d,%llu,%llu,%llu\n", 
+		fprintf(perflog->fp, "%llu,%d,%llu,%llu,%lld\n", 
 		perflog->log[i].ts, 
 		perflog->log[i].event, 
 		perflog->log[i].hfref, 
@@ -654,11 +681,6 @@ void xperflog_dump(struct gomp_thread *thr){
 	fclose(perflog->fp);
 	perflog->fp = NULL;
 
-	// below commented code is for binary output
-	// 	// fwrite(perflog->ts, sizeof(unsigned long long), perflog->eidx, perflog->fp);
-	// 	// fwrite(perflog->events, sizeof(xperf_type_t), perflog->eidx, perflog->fp);
-	// 	// fwrite(perflog->hfref, sizeof(unsigned long long), perflog->frefidx, perflog->fp);
-	// 	// fclose(perflog->fp);
 	// put a bar here
 	// xperflog_wait();
 }
@@ -689,10 +711,6 @@ static inline void xperflog_done(struct gomp_thread *thr){
 	if(thr->xperflog.fp){
 		fclose(thr->xperflog.fp);
 	}
-	// fclose(thr->xperflog.fp);
-	// free(thr->xperflog.ts);
-	// free(thr->xperflog.events);
-	// free(thr->xperflog.hfref);
 }
 
 void xperflog_dump_reset(){
@@ -701,6 +719,7 @@ void xperflog_dump_reset(){
 	xperflog_reset(thr);
 	// xperflog_done(thr);
 }
+#endif // GOMP_USE_XPERFLOG
 
 /**
  * Interfaces that can be called by the user
@@ -709,19 +728,26 @@ void xperflog_dump_reset(){
 */
 
 void xomp_perflog_dump(void){
+	#ifdef GOMP_USE_XPERFLOG
 	struct gomp_thread *thr = gomp_thread();
 	xperflog_dump(thr);
+	#else
+	xtask_debug(0, 0, "xperflog - dump: perflog is not enabled.");
+	#endif // GOMP_USE_XPERFLOG
 }
 
+
 void xomp_perflog_info(void){
+	#ifdef GOMP_USE_XPERFLOG
 	struct gomp_thread *thr = gomp_thread();
 	struct xperflog *perflog = &thr->xperflog;
 	xtask_debug(0, 0, 
 		"xperflog - info: tid=%d, eidx=%llu, last_q=%d, generation=%d, xperflog_path=%s, filename=%s",
 		thr->ts.team_id, perflog->eidx, perflog->last_q, perflog->generation, perflog->xperflog_path, perflog->filename
 	);
+	#endif // GOMP_USE_XPERFLOG
 }
-#endif // GOMP_USE_XPERFLOG
+
 #endif // GOMP_USE_XQUEUE
 
 /* Create a new task data structure.  */
@@ -2149,6 +2175,12 @@ while(1){
 		if(new_victim)
 			new_victim = new_victim;
 
+		if(child_task)
+			xperflog_record(XPERF_STALL_END | XPERF_BAR, bar_fref, bar_fref);
+		else
+			xperflog_record(XPERF_BAR_END| XPERF_STALL, bar_fref, bar_fref);
+
+
 		if(child_task){
 			//TODO: handle cancel
 			child_task->kind = GOMP_TASK_TIED;
@@ -2184,6 +2216,8 @@ while(1){
 			thr->task = task;
 		}else
 			break;
+		
+			
 			
 
 		if(!use_own_tasks && thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_head] != NULL){
@@ -2435,13 +2469,15 @@ GOMP_taskwait (void)
 			
 				next_task = gomp_remove_aux_task(&last_qid);
 			}
-			if(next_task == NULL)
+			if(next_task == NULL){
+				xperflog_record(XPERF_TASKWAIT_END | XPERF_STALL, taskwait_fref, taskwait_fref);
 				continue;
+			}
 			
 
 			if (next_task->kind == GOMP_TASK_WAITING)
 			{	
-
+				xperflog_record(XPERF_STALL_END | XPERF_TASKWAIT, taskwait_fref, taskwait_fref);
 				child_task = next_task;
 				child_task->kind = GOMP_TASK_TIED; // move this out of gomp_task_run_pre, so it only handles barriers
 				child_task->in_tied_task = true;
