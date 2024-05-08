@@ -285,12 +285,12 @@ gomp_push_task(struct gomp_task *task){
 		return TASK_NOT_PUSHED;
 	}
 	struct gomp_taskq *task_q = target_thr->td_task_q[last_q];
+	task_q->nin++; // Will it be reordered by compilers or CPU?
 	task_q->td_deque[task_q->td_deque_head] = task;
 	task_q->td_deque_head = (task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
 	target_thr->last_q_accessed = last_q;
 
 
-	task_q->nin++;
 	#ifdef GOMP_USE_XWS
 	thr->nqops++;
 	/**

@@ -881,31 +881,19 @@ typedef struct xperflog_cell {
   unsigned long long hfref; // frame reference number for highbit event
   unsigned long long lfref; // frame reference number for lowbit event
   long long sample; // sample
-  // unsigned int group; // group id
 } xperflog_cell_t
 __attribute__((aligned(64)));
 
 typedef struct xperflog {
-  // unsigned long long ts[XPERFLOG_MAX_EVENTS]; // timestamp, __rdtscp or __rdtsc
-  // xperf_event_type_t events[XPERFLOG_MAX_EVENTS]; // event type
-  // long sample[XPERFLOG_MAX_EVENTS]; // sample index
   unsigned long long frefc[XPERF_N_EVENTS]; // frame refernce counters
   unsigned long long eidx; // index of the log
-  // unsigned long long frefidx; // sample index
   xperflog_cell_t *log; // log
   unsigned int last_q;
   long long ssum; // sample sum
-  // unsigned int cgroup; //current group
-
   char *xperflog_path;
   char filename[64]; // log file name
   void *fp; // use void * instead of FILE * to avoid including stdio.h here
-  // unsigned long long *ts; // timestamp, __rdtscp or __rdtsc
-  // xperf_type_t *events; // event type
-  // unsigned long long *fref; // samples, count or whatever
-  // unsigned long long *fref1; // ugly, but for now, just use it
-  // unsigned long long len; // length of the log, could it be just eidx?
-  // redundent // unsigned long counter[XPERF_N_COUNTERS]; // counters
+
   int tid; // thread id
   int generation;
   bool is_stalling; // is stalling
