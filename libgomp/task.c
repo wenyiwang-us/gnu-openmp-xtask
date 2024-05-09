@@ -62,7 +62,11 @@ htab_eq (hash_entry_type x, hash_entry_type y)
 
 #ifdef GOMP_USE_XQUEUE
 
-#ifdef XTASK_XWS
+static int gomp_push_task(struct gomp_task *);
+static gomp_task_t* gomp_remove_my_task();
+static gomp_task_t* gomp_remove_aux_task(unsigned long *);
+
+#ifdef XTASK_LLWS
 /**
  * XWS - XWorkStealing
 */
@@ -110,7 +114,7 @@ bool xws_send_reqs();
 /**
  * Called by the victim after it found tasks from q-ops
 */
-bool xws_handle_reqs();
+bool xws_handle_reqs(unsigned long *last_qid);
 
 
 static inline void xws_init(){
@@ -126,8 +130,12 @@ static inline void xws_init(){
 	// allocate memory for sum and lds
 	xws->ld_info.tsums = (long long *)gomp_malloc(sizeof(long long) * thr->num_queues);
 	memset(xws->ld_info.tsums, 0, sizeof(long long) * thr->num_queues);
-	xws->ld_info.lds = (load_info_cell_t *)gomp_malloc(sizeof(load_info_cell_t) * thr->num_queues);
-	memset(xws->ld_info.lds, 0, sizeof(load_info_cell_t) * thr->num_queues);
+	xws->ld_info.lds = (volatile load_info_cell_t *)gomp_malloc(sizeof(load_info_cell_t) * thr->num_queues);
+	for(int i = 0; i < thr->num_queues; i++){
+		xws->ld_info.lds[i].ldi = 0;
+		xws->ld_info.lds[i].visited = false;
+	}
+// 	memset(xws->ld_info.lds, 0, sizeof(load_info_cell_t) * thr->num_queues);
 }
 
 static void xws_reset(){
@@ -164,7 +172,7 @@ bool xws_find_victims(int n){
 	struct gomp_thread *thr = gomp_thread();
 	xws_t *xws = &thr->xws;
 	if(xws->flag != XWS_STEALING)
-		xws_reset_load_flags();
+		xws_reset();
 
 	int m = 0; // record number of victims that can send steal requests to
 	for(int i = xws->last_req_qid, j = 0; j < thr->num_queues; j++){
@@ -174,7 +182,7 @@ bool xws_find_victims(int n){
 			xws->victims[m++] = qid;
 			xws->nreqs++;
 			if(m >= n){
-				xws->last_req_qid = qid + 1;
+				xws->last_req_qid = qid;
 				return true;
 			}
 		}
@@ -183,11 +191,62 @@ bool xws_find_victims(int n){
 	return false;
 }
 
-static int xws_push_tasks(int ttid, int n){
+static int xws_push_tasks(int ttid, int n, unsigned long * last_qid){
 	struct gomp_thread *thr = gomp_thread();
-	xws_t *xws = &thr->xws;
+	struct gomp_thread *target_thr = thr->thread_pool->threads[ttid];
 	int tid = thr->ts.team_id;
+	int target_qid = tid - ttid < 0 ? tid - ttid + thr->num_queues : tid - ttid;
 
+
+	// First remove aux queue - I think it is good for locality since my tasks are created localy
+	gomp_task_t *task = NULL;
+	struct gomp_taskq *task_q = NULL;
+	int num_tries = 0, npushed = 0; // npushed is counter of successful pushes
+	enum xws_flag flag = XWS_INIT_VAL;
+
+	// starting from last q
+	int qid = thr->last_q_accessed;
+	int num_q_accessed = 0;
+	while(1){
+		task_q = thr->td_task_q[qid];
+		while(num_q_accessed <= thr->num_queues){
+			// Finding slots in thief's q
+			while(target_thr->td_task_q[target_qid]->td_deque[target_thr->td_task_q[target_qid]->td_deque_head] != NULL){
+				num_tries++;
+				if(num_tries < 25)
+					continue;
+				flag = XWS_TASK_QUEUE_FULL; // target thr's q is full
+			}
+			if(flag == XWS_TASK_QUEUE_FULL)
+				break;
+			// target thr's q
+			struct gomp_taskq *target_task_q = target_thr->td_task_q[target_qid];
+
+			// Finding existing tasks in my q
+			while((task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail]) && npushed < n){
+				task_q->td_deque[task_q->td_deque_tail] = NULL;
+				task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
+				target_task_q->nin++;
+				target_task_q->td_deque[target_task_q->td_deque_head] = task;
+				target_task_q->td_deque_head = (target_task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
+				*last_qid = qid;
+				task_q->nout++;
+				
+				if(npushed++ >= n){
+					return TASK_SUCCESSFULLY_PUSHED;
+				}
+			}
+			num_q_accessed++;
+			qid = qid + 1 < thr->num_queues ? qid + 1 : 0;
+			
+		}
+	}
+	
+	if(npushed)
+		return TASK_SUCCESSFULLY_PUSHED;
+	
+	if(flag == XWS_TASK_QUEUE_FULL)
+		return TASK_NOT_PUSHED;
 }
 
 /**
@@ -217,11 +276,11 @@ bool xws_send_reqs(){
 	return true;
 }
 
-bool xws_handle_reqs(){
+bool xws_handle_reqs(unsigned long *last_qid){
 	struct gomp_thread *thr = gomp_thread();
 	xws_t *xws = &thr->xws;
 	int tid = thr->ts.team_id;
-	xws->flag = XWS_NULL; // I no longer steal
+	xws->flag = XWS_INIT_VAL; // I no longer steal, since this is called when tasks found
 
 	xws_update_loads();
 
@@ -231,16 +290,16 @@ bool xws_handle_reqs(){
 		int ttid = XWS_REQ_TO_TID(xws->req);
 		if(round == xws->round){
 			// remove tasks from my side and push to the thief
+			xws_push_tasks(ttid, INITIAL_TASK_DEQUE_SIZE, last_qid);
+			return true;
 		}
 	}
-	
-
 	return false;
 }
 
 
 
-#endif // XTASK_XWS
+#endif // XTASK_LLWS
 
 
 #ifdef GOMP_USE_XWS
@@ -317,7 +376,7 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 		#ifdef GOMP_USE_XWS
 		}
 		#endif // GOMP_USE_XWS
-		
+	 xws_init();
 	}
 /**
  * XWS - XWorkStealing
@@ -444,7 +503,7 @@ gomp_push_task(struct gomp_task *task){
 	// TODO: kmp, make sure tid and gtid are correct, kmp uses different ways to get tid and gtid
 	// gomp_debug(0, "[tid=%d] wenyi(gomp_push_task): gtid=%ld", omp_get_thread_num(), gtid);
 	unsigned long last_q = thr->last_q;
-	unsigned long target_tid = gtid + last_q;
+	unsigned long target_tid = gtid + last_q; // starting target tid
 
 	target_tid = (target_tid > team->nthreads - 1) ? (target_tid - team->nthreads) : target_tid;
 	// gomp_debug(0, "[tid=%d] wenyi(gomp_push_task): target_id=%ld", omp_get_thread_num(), target_id);
@@ -567,24 +626,6 @@ gomp_remove_aux_task(unsigned long *last_qid){
 	task_q->nout++;
 	return task;
 };
-
-/**
- * Work-stealing algorithm for task scheduling.
- * This is called by the worker threads to steal tasks from other threads.
-*/
-
-static inline int xws_send_steal_requests(){
-
-	return 0;
-}
-static inline int xws_check_response(){
-	return 0;
-}
-
-static inline int xws_handle_steal_requests(){
-	return 0;
-}
-
 
 
 /** author: ww
@@ -2357,16 +2398,23 @@ while(1){
 		if(new_victim)
 			new_victim = new_victim;
 
-		if(child_task)
+		if(child_task){
+			#ifdef XTASK_LLWS
+			xws_handle_reqs(&last_qid);
+			#endif // XTASK_LLWS
 			xperflog_record(XPERF_STALL_END | XPERF_BAR, bar_fref, bar_fref);
-		else
+		} else{
+			xws_send_reqs();
 			xperflog_record(XPERF_BAR_END| XPERF_STALL, bar_fref, bar_fref);
-
+			break;
+		}
 
 		if(child_task){
 			//TODO: handle cancel
 			child_task->kind = GOMP_TASK_TIED;
 			child_task->in_tied_task = true;
+
+			
 			
 			if (__builtin_expect (cancelled, 0)){
 				if (to_free){
@@ -2652,8 +2700,15 @@ GOMP_taskwait (void)
 				next_task = gomp_remove_aux_task(&last_qid);
 			}
 			if(next_task == NULL){
+				#ifdef XTASK_LLWS
+				xws_send_reqs();
+				#endif
 				xperflog_record(XPERF_TASKWAIT_END | XPERF_STALL, taskwait_fref, taskwait_fref);
 				continue;
+			}else{
+				#ifdef XTASK_LLWS
+				xws_handle_reqs(&last_qid);
+				#endif
 			}
 			
 

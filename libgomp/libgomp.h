@@ -75,7 +75,7 @@
 #define GOMP_USE_XQUEUE 1
 // #define GOMP_USE_XWS 1 // use xworkshares/workstealing
 #define GOMP_USE_XPERFLOG 1
-#define XTASK_XWS 1
+#define XTASK_LLWS 1
 
 
 /* If we were a C++ library, we'd get this from <std/atomic>.  */
@@ -584,8 +584,10 @@ struct gomp_taskwait
 
 #ifdef GOMP_USE_XQUEUE
 typedef struct gomp_task gomp_task_t;
+#define TASK_INIT_VAL -1
 #define TASK_SUCCESSFULLY_PUSHED 0
 #define TASK_NOT_PUSHED 1
+#define TASK_QUEUE_FULL 2
 
 #define GOMP_ATOMIC_CMPXCHG(PTR, OLD, NEW) __atomic_compare_exchange_n (PTR, OLD, NEW, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)
 #define GOMP_ATOMIC_ST_REL(PTR, VAL) __atomic_store_n (PTR, VAL, __ATOMIC_RELEASE)
@@ -843,21 +845,28 @@ struct xflag{
 }
 __attribute__((aligned(64)));
 
-#ifdef XTASK_XWS
+#ifdef XTASK_LLWS
 /**
  * XWS related fields.
 */
 
 #define XWS_BATCH_SIZE 8
+
+#define XWS_TID_TO_HIGH_BITS(a) ((uint64_t)(a) << 40)
+#define XWS_REQ_TO_ROUND(a) ((a) & (uint64_t)((1ULL << 40) - 1))
+#define XWS_REQ_TO_TID(a) ((int)((a) >> 40))
+
+
 #define XWS_VERY_LOW 1 // an arbitrary number
-#define XWS_TID_TO_HIGH_BITS(a) ((uint64_t)(a)<<40)
-#define XWS_ROUND_MASK(a) ((a) & (uint64_t)((1ULL << 40) - 1))
 #define XWS_LOW ((INITIAL_TASK_DEQUE_SIZE >> 2)) // an arbitrary number
 #define XWS_HIGH ((INITIAL_TASK_DEQUE_SIZE * 7 / 8)) // an arbitrary number
 
 enum xws_flag{
-  XWS_NULL = 0,
-  XWS_STEALING = 1
+  XWS_INIT_VAL = 0,
+  XWS_STEALING = 1,
+
+  XWS_TASK_QUEUE_FULL = 2,
+  XWS_TASK_
 };
 
 typedef struct load_state{
@@ -872,28 +881,28 @@ typedef struct load_info_cell{
 } load_info_cell_t;
 
 typedef struct load_info{
-  int qid; // current qid of xq
-  long long tsum; // total accumulated sum of tasks.
-  long long *tsums; // total prefix sum of tasks
-  load_info_cell_t *lds; // loads
+  int qid; // current qid of xq, owner: me
+  long long tsum; // total accumulated sum of tasks. owner: me
+  long long *tsums; // total prefix sum of tasks owner: me
+  volatile load_info_cell_t *lds; // loads, ower: all
 } load_info_t;
 
 typedef struct xws {
-  unsigned batch_size;
-  load_state_t ld_states;
-  unsigned flag;
-  unsigned num_tries;
-  unsigned nreqs; // number of out requests/victims
+  unsigned batch_size; // batch size of requests sent at each round; init early
+  load_state_t ld_states; // load states, init early
+  enum xws_flag flag; // flag, owner: me
+  unsigned num_tries; // number of tries, owner: me
+  unsigned nreqs; // number of out requests/victims: owner: me
   int last_req_qid;
-  uint64_t round;
-  uint64_t req;
-  int victims[XWS_BATCH_SIZE];
+  volatile uint64_t round; // accssed by all threads, owner: all
+  volatile uint64_t req; // accessed by all threads, owner: all
+  int victims[XWS_BATCH_SIZE]; // victims I steal from.
   load_info_t ld_info; // load info
     // {idx, tsum, tsums, lds {idx, flag}}
 } xws_t __attribute__((aligned(64)));
 
 
-#endif // XTASK_XWS
+#endif // XTASK_LLWS
 
 #ifdef GOMP_USE_XPERFLOG
 #define XPERFLOG_MAX_EVENTS 1<<27 // 128MB events
@@ -987,9 +996,9 @@ struct gomp_thread
   unsigned long tl_task_queued_count;
   bool use_xq; // use xq or not, default is yes, when incompat clauses appeared, will use default GNU tasking implementation
   struct xflag xflag;
-#ifdef XTASK_XWS
-  volatile xws_t xws;
-#endif // XTASK_XWS
+#ifdef XTASK_LLWS
+  xws_t xws;
+#endif // XTASK_LLWS
 
 #ifdef GOMP_USE_XWS
   /**
