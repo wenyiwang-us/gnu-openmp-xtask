@@ -75,6 +75,7 @@
 #define GOMP_USE_XQUEUE 1
 // #define GOMP_USE_XWS 1 // use xworkshares/workstealing
 #define GOMP_USE_XPERFLOG 1
+#define XTASK_XWS 1
 
 
 /* If we were a C++ library, we'd get this from <std/atomic>.  */
@@ -842,6 +843,58 @@ struct xflag{
 }
 __attribute__((aligned(64)));
 
+#ifdef XTASK_XWS
+/**
+ * XWS related fields.
+*/
+
+#define XWS_BATCH_SIZE 8
+#define XWS_VERY_LOW 1 // an arbitrary number
+#define XWS_TID_TO_HIGH_BITS(a) ((uint64_t)(a)<<40)
+#define XWS_ROUND_MASK(a) ((a) & (uint64_t)((1ULL << 40) - 1))
+#define XWS_LOW ((INITIAL_TASK_DEQUE_SIZE >> 2)) // an arbitrary number
+#define XWS_HIGH ((INITIAL_TASK_DEQUE_SIZE * 7 / 8)) // an arbitrary number
+
+enum xws_flag{
+  XWS_NULL = 0,
+  XWS_STEALING = 1
+};
+
+typedef struct load_state{
+  unsigned very_low; // > 0
+  unsigned low;
+  unsigned high;
+} load_state_t;
+
+typedef struct load_info_cell{
+  long long ldi; // load index
+  bool visited;
+} load_info_cell_t;
+
+typedef struct load_info{
+  int qid; // current qid of xq
+  long long tsum; // total accumulated sum of tasks.
+  long long *tsums; // total prefix sum of tasks
+  load_info_cell_t *lds; // loads
+} load_info_t;
+
+typedef struct xws {
+  unsigned batch_size;
+  load_state_t ld_states;
+  unsigned flag;
+  unsigned num_tries;
+  unsigned nreqs; // number of out requests/victims
+  int last_req_qid;
+  uint64_t round;
+  uint64_t req;
+  int victims[XWS_BATCH_SIZE];
+  load_info_t ld_info; // load info
+    // {idx, tsum, tsums, lds {idx, flag}}
+} xws_t __attribute__((aligned(64)));
+
+
+#endif // XTASK_XWS
+
 #ifdef GOMP_USE_XPERFLOG
 #define XPERFLOG_MAX_EVENTS 1<<27 // 128MB events
 // lets use bit 10 to indicate if the event is a sample event
@@ -934,6 +987,9 @@ struct gomp_thread
   unsigned long tl_task_queued_count;
   bool use_xq; // use xq or not, default is yes, when incompat clauses appeared, will use default GNU tasking implementation
   struct xflag xflag;
+#ifdef XTASK_XWS
+  volatile xws_t xws;
+#endif // XTASK_XWS
 
 #ifdef GOMP_USE_XWS
   /**

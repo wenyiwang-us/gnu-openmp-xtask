@@ -61,6 +61,188 @@ htab_eq (hash_entry_type x, hash_entry_type y)
 }
 
 #ifdef GOMP_USE_XQUEUE
+
+#ifdef XTASK_XWS
+/**
+ * XWS - XWorkStealing
+*/
+
+/**
+ * XWS - Init
+ * Called by alloc_task_q
+*/
+static inline void xws_init();
+
+
+/**
+ * Load Index related API
+*/
+
+/**
+ * XWS - XWorkStealing
+ * Find the victims
+ * @param int n - the number of victims to find
+ * @return true if the victims are found, false otherwise.
+*/
+bool xws_find_victims(int n);
+
+/**
+ * XWS - XWorkStealing
+ * Reset the flags of current thread's load to inital state
+*/
+static void xws_reset();
+
+/**
+ * XWS - XWorkStealing
+ * Update the loads of the threads
+*/
+static inline void xws_update_loads();
+
+/**
+ * Work-Stealing related API
+*/
+
+/**
+ *  Called by the thief after it found nothing from q-ops
+*/
+bool xws_send_reqs();
+
+/**
+ * Called by the victim after it found tasks from q-ops
+*/
+bool xws_handle_reqs();
+
+
+static inline void xws_init(){
+	struct gomp_thread *thr = gomp_thread();
+	xws_t *xws = &thr->xws;
+
+	memset(xws, 0, sizeof(xws_t)); // set all to 0
+	xws->batch_size = XWS_BATCH_SIZE < thr->num_queues - 1 ? XWS_BATCH_SIZE : thr->num_queues - 1;
+	xws->ld_states.very_low = (unsigned) XWS_VERY_LOW * thr->num_queues;
+	xws->ld_states.low = (unsigned) XWS_LOW * thr->num_queues;
+	xws->ld_states.high = (unsigned) XWS_HIGH * thr->num_queues;
+
+	// allocate memory for sum and lds
+	xws->ld_info.tsums = (long long *)gomp_malloc(sizeof(long long) * thr->num_queues);
+	memset(xws->ld_info.tsums, 0, sizeof(long long) * thr->num_queues);
+	xws->ld_info.lds = (load_info_cell_t *)gomp_malloc(sizeof(load_info_cell_t) * thr->num_queues);
+	memset(xws->ld_info.lds, 0, sizeof(load_info_cell_t) * thr->num_queues);
+}
+
+static void xws_reset(){
+	struct gomp_thread *thr = gomp_thread();
+	xws_t *xws = &thr->xws;
+	xws->nreqs = 0;
+	for(int i = 0; i < thr->num_queues; i++){
+		xws->ld_info.lds[i].visited = false;
+	}
+}
+
+static inline void xws_update_loads(){
+	struct gomp_thread *thr = gomp_thread();
+	xws_t *xws = &thr->xws;
+	load_info_t *ld_info = &xws->ld_info;
+
+	// accumulated prefix sum, each iter, we update the load of one queue
+	ld_info->tsum += thr->td_task_q[ld_info->qid]->nin - thr->td_task_q[ld_info->qid]->nout;
+	// save this accumulated prefix sum for further load calculation
+	// TODO: we can batch this if necessary
+	ld_info->tsums[ld_info->qid] = ld_info->tsum;
+
+
+	int next_qid = ld_info->qid + 1 < thr->num_queues ? ld_info->qid + 1 : 0;
+	int tid = thr->ts.team_id;
+
+	// update load index
+	ld_info->lds[tid].ldi = ld_info->tsums[ld_info->qid] - ld_info->tsums[next_qid];
+
+	ld_info->qid = next_qid;
+}
+
+bool xws_find_victims(int n){
+	struct gomp_thread *thr = gomp_thread();
+	xws_t *xws = &thr->xws;
+	if(xws->flag != XWS_STEALING)
+		xws_reset_load_flags();
+
+	int m = 0; // record number of victims that can send steal requests to
+	for(int i = xws->last_req_qid, j = 0; j < thr->num_queues; j++){
+		int qid = i < thr->num_queues ? i : 0;
+		if(xws->ld_info.lds[qid].ldi > xws->ld_states.high && !xws->ld_info.lds[qid].visited){
+			xws->ld_info.lds[qid].visited = true;
+			xws->victims[m++] = qid;
+			xws->nreqs++;
+			if(m >= n){
+				xws->last_req_qid = qid + 1;
+				return true;
+			}
+		}
+		i++;
+	}
+	return false;
+}
+
+static int xws_push_tasks(int ttid, int n){
+	struct gomp_thread *thr = gomp_thread();
+	xws_t *xws = &thr->xws;
+	int tid = thr->ts.team_id;
+
+}
+
+/**
+ * This is called only by the thief. A worker is a thief only when it found nothing after q-ops
+*/
+bool xws_send_reqs(){
+	struct gomp_thread *thr = gomp_thread();
+	xws_t *xws = &thr->xws;
+
+	// for now, ignore the case when worker is already stealing
+	if(xws->flag == XWS_STEALING)
+		return false;
+
+	bool find_victims = xws_find_victims(xws->batch_size);
+
+	if(!find_victims)
+		return false;
+
+	int tid = thr->ts.team_id; // my tid
+	uint64_t hb_tid = XWS_TID_TO_HIGH_BITS(tid);
+	for(int i = 0; i < xws->batch_size; i++){
+		xws_t *victim_xws = &thr->thread_pool->threads[xws->victims[i]]->xws;
+		// send steal request to the victim
+		victim_xws->req = victim_xws->round | hb_tid;
+	}
+	xws->flag = XWS_STEALING;
+	return true;
+}
+
+bool xws_handle_reqs(){
+	struct gomp_thread *thr = gomp_thread();
+	xws_t *xws = &thr->xws;
+	int tid = thr->ts.team_id;
+	xws->flag = XWS_NULL; // I no longer steal
+
+	xws_update_loads();
+
+	// check load, and only respond when my load is high
+	if(xws->ld_info.lds[tid].ldi >= xws->ld_states.high){
+		uint64_t round = XWS_REQ_TO_ROUND(xws->req);
+		int ttid = XWS_REQ_TO_TID(xws->req);
+		if(round == xws->round){
+			// remove tasks from my side and push to the thief
+		}
+	}
+	
+
+	return false;
+}
+
+
+
+#endif // XTASK_XWS
+
+
 #ifdef GOMP_USE_XWS
 
 
