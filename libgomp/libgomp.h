@@ -859,7 +859,7 @@ __attribute__((aligned(64)));
 
 #define XWS_VERY_LOW 1 // an arbitrary number
 #define XWS_LOW ((INITIAL_TASK_DEQUE_SIZE >> 2)) // an arbitrary number
-#define XWS_HIGH ((INITIAL_TASK_DEQUE_SIZE * 4 / 8)) // an arbitrary number
+#define XWS_HIGH ((INITIAL_TASK_DEQUE_SIZE * 3 / 8)) // an arbitrary number
 
 enum xws_flag{
   XWS_INIT_VAL = 0,
@@ -875,12 +875,13 @@ typedef struct load_state{
 } load_state_t __attribute__((aligned(64)));
 
 typedef struct load_info_cell{
-  long long ldi; // load index
-  bool visited;
+  volatile long long ldi; // load index
+  volatile bool visited;
 } load_info_cell_t;
 
 typedef struct load_info{
   int qid; // current qid of xq, owner: me
+  int last_updated_tid; // last updated tid, owner: me
   long long tsum; // total accumulated sum of tasks. owner: me
   long long *tsums; // total prefix sum of tasks owner: me
   volatile load_info_cell_t *lds; // loads, ower: all
@@ -898,6 +899,9 @@ typedef struct xws {
   int victims[XWS_BATCH_SIZE]; // victims I steal from.
   load_info_t ld_info; // load info
     // {idx, tsum, tsums, lds {idx, flag}}
+
+  // debug usage
+  unsigned long long nops; // number of operations
 } xws_t __attribute__((aligned(64)));
 
 

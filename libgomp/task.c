@@ -131,6 +131,9 @@ static inline void xws_init(){
 	xws->round = 1;
 	xws->req = 0;
 
+	xws->nops = 0;
+	xws->ld_info.last_updated_tid = thr->ts.team_id;
+
 	// allocate memory for sum and lds
 	xws->ld_info.tsums = (long long *)gomp_malloc(sizeof(long long) * thr->num_queues);
 	memset(xws->ld_info.tsums, 0, sizeof(long long) * thr->num_queues);
@@ -141,6 +144,41 @@ static inline void xws_init(){
 
 	}
 // 	memset(xws->ld_info.lds, 0, sizeof(load_info_cell_t) * thr->num_queues);
+}
+
+
+static inline void xws_printloads(int tid){
+	struct gomp_thread *thr = gomp_thread();
+	xws_t *xws = &thr->xws;
+
+	if(thr->ts.team_id != tid)
+		return;
+
+	
+	for(int i = 0; i < thr->num_queues; i++){
+		long long load = 0;
+		// my load and other's load
+		struct gomp_thread *tthr = thr->thread_pool->threads[i];
+		struct gomp_taskq **taskq = tthr->td_task_q;
+		// freshly calcuated load
+		for(int j = 0; j < thr->num_queues; j++){
+			load += taskq[j]->nin - taskq[j]->nout;
+		}
+		if(tthr->xws.ld_info.lds[i].ldi > xws->ld_states.high)
+			xtask_debug(0, 1, "ttid=%d, load=%lld/%d, my_ldi=%lld, visited=%d, their_ldi=%lld, nops=%llu,"
+			" req=%lu, round=%lu",
+			i, 
+			load, 
+			xws->ld_states.high,
+			xws->ld_info.lds[i].ldi, 
+			xws->ld_info.lds[i].visited,
+			tthr->xws.ld_info.lds[i].ldi,
+			tthr->xws.nops,
+			tthr->xws.req,
+			tthr->xws.round
+			);
+	
+	}
 }
 
 static void xws_reset(){
@@ -175,8 +213,13 @@ static inline void xws_update_loads(int qid){
 		ld_info->lds[tid].ldi = ld_info->tsums[ld_info->qid] - ld_info->tsums[next_qid];
 
 		ld_info->qid = next_qid;
+		// update others
+		ld_info->last_updated_tid = ld_info->last_updated_tid + 1 < thr->num_queues ? ld_info->last_updated_tid + 1 : 0;
+		struct gomp_thread *tthr = thr->thread_pool->threads[ld_info->last_updated_tid];
+		tthr->xws.ld_info.lds[tid].ldi = xws->ld_info.lds[tid].ldi;
+
 	}else{
-		xtask_debug(0, 1, "etners. qid=%d.", qid);
+		// xtask_debug(0, 1, "etners. qid=%d.", qid);
 		// there is a specific qid we want to update
 		while(qid != ld_info->qid){
 			ld_info->tsum += thr->td_task_q[ld_info->qid]->nin - thr->td_task_q[ld_info->qid]->nout;
@@ -186,6 +229,7 @@ static inline void xws_update_loads(int qid){
 			ld_info->qid = next_qid;
 		}
 	}
+	xws->nops++;
 
 }
 
@@ -215,6 +259,8 @@ bool xws_find_victims(int n){
 		}
 		i++;
 	}
+	// xws_printloads(3);
+
 	return false;
 }
 
@@ -234,46 +280,42 @@ static int xws_push_tasks(int ttid, int n, unsigned long * last_qid){
 	// starting from last q
 	int qid = thr->last_q_accessed;
 	int num_q_accessed = 0;
-	while(1){
-		task_q = thr->td_task_q[qid];
-		while(num_q_accessed <= thr->num_queues){
-			// Finding slots in thief's q
-			while(target_thr->td_task_q[target_qid]->td_deque[target_thr->td_task_q[target_qid]->td_deque_head] != NULL){
-				num_tries++;
-				if(num_tries < 25)
-					continue;
-				flag = XWS_TASK_QUEUE_FULL; // target thr's q is full
-			}
-			if(flag == XWS_TASK_QUEUE_FULL)
-				break;
-			// target thr's q
-			struct gomp_taskq *target_task_q = target_thr->td_task_q[target_qid];
 
-			// Finding existing tasks in my q
-			while((task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail]) && npushed < n){
-				task_q->td_deque[task_q->td_deque_tail] = NULL;
-				task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
-				target_task_q->nin++;
-				target_task_q->td_deque[target_task_q->td_deque_head] = task;
-				target_task_q->td_deque_head = (target_task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
-				*last_qid = qid;
-				task_q->nout++;
-				
-				if(npushed++ >= n){
-					return TASK_SUCCESSFULLY_PUSHED;
-				}
-			}
-			num_q_accessed++;
-			qid = qid + 1 < thr->num_queues ? qid + 1 : 0;
-			
+	while(num_q_accessed <= thr->num_queues){
+		task_q = thr->td_task_q[qid];
+		// Finding slots in thief's q
+		while(target_thr->td_task_q[target_qid]->td_deque[target_thr->td_task_q[target_qid]->td_deque_head] != NULL){
+			num_tries++;
+			if(num_tries < 25)
+				continue;
+			flag = XWS_TASK_QUEUE_FULL; // target thr's q is full
+			break;
 		}
+
+		if(flag == XWS_TASK_QUEUE_FULL)
+			break;
+		// target thr's q
+		struct gomp_taskq *target_task_q = target_thr->td_task_q[target_qid];
+
+		// Finding existing tasks in my q
+		while((task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail]) && npushed < n){
+			task_q->td_deque[task_q->td_deque_tail] = NULL;
+			task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
+			target_task_q->nin++;
+			target_task_q->td_deque[target_task_q->td_deque_head] = task;
+			target_task_q->td_deque_head = (target_task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
+			*last_qid = qid;
+			task_q->nout++;
+			
+			if(npushed++ >= n){
+				return TASK_SUCCESSFULLY_PUSHED;
+			}
+		}
+		num_q_accessed++;
+		qid = qid + 1 < thr->num_queues ? qid + 1 : 0;
 	}
 
-	if(npushed)
-		return TASK_SUCCESSFULLY_PUSHED;
-	
-	if(flag == XWS_TASK_QUEUE_FULL)
-		return TASK_NOT_PUSHED;
+	return npushed;
 }
 
 /**
@@ -287,9 +329,10 @@ bool xws_send_reqs(){
 	if(xws->flag == XWS_STEALING)
 		return false;
 
-	xtask_debug(0, 1, "start stealing. nreqs=%d", xws->nreqs);
 
 	bool find_victims = xws_find_victims(xws->batch_size);
+	// if(find_victims)
+	// 	xtask_debug(0, 1, "start stealing. nreqs=%d, find_victims=%d", xws->nreqs, find_victims);
 
 	if(!find_victims)
 		return false;
@@ -317,14 +360,18 @@ bool xws_handle_reqs(unsigned long *last_qid){
 		// xtask_debug(0, 0, "enters. Load=%lld/%d, req=", xws->ld_info.lds[tid].ldi, xws->ld_states.high);
 		uint64_t round = XWS_REQ_TO_ROUND(xws->req);
 		int ttid = XWS_REQ_TO_TID(xws->req);
-		// xtask_debug(0, 1, "load high");
+	
 		if(round == xws->round){
-			xtask_debug(0, 1, "handle_req, load=%lld, ttid=%d, round=%ld, req=%ld", xws->ld_info.lds[tid].ldi, ttid, round, xws->req);
+			// xtask_debug(0, 1, "handle_req_from T#%d, load=%lld, round=%ld, req=%ld", ttid, xws->ld_info.lds[tid].ldi, round, xws->req);
 			// remove tasks from my side and push to the thief
-			xws_push_tasks(ttid, xws->batch_size, last_qid);
+			int npushed __attribute__((unused));
+			npushed = xws_push_tasks(ttid, 8, last_qid);
+			// xtask_debug(0, 1, "task pushed=%d", npushed);
 			// upload the load info
 			xws_update_loads((int)(*last_qid));
 			xws_update_load(ttid);
+
+			
 			xws->round++;
 			return true;
 		}
@@ -354,8 +401,8 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	thr->last_q_accessed = 0;
 	
 	// thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * thr->num_queues);
-	thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * (thr->num_queues + 1)); // with xws
-	for (int queue_id = 0; queue_id < thr->num_queues + 1; queue_id++){
+	thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * (thr->num_queues)); // with xws
+	for (int queue_id = 0; queue_id < thr->num_queues; queue_id++){
 			thr->td_task_q[queue_id] = (struct gomp_taskq *)gomp_malloc(sizeof(struct gomp_taskq));
 			thr->td_task_q[queue_id]->td_deque = (volatile struct gomp_task **)gomp_malloc(sizeof(struct gomp_task *) * INITIAL_TASK_DEQUE_SIZE);
 			thr->td_deque_size = INITIAL_TASK_DEQUE_SIZE;
