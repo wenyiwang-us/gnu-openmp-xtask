@@ -859,21 +859,20 @@ __attribute__((aligned(64)));
 
 #define XWS_VERY_LOW 1 // an arbitrary number
 #define XWS_LOW ((INITIAL_TASK_DEQUE_SIZE >> 2)) // an arbitrary number
-#define XWS_HIGH ((INITIAL_TASK_DEQUE_SIZE * 7 / 8)) // an arbitrary number
+#define XWS_HIGH ((INITIAL_TASK_DEQUE_SIZE * 4 / 8)) // an arbitrary number
 
 enum xws_flag{
   XWS_INIT_VAL = 0,
   XWS_STEALING = 1,
 
   XWS_TASK_QUEUE_FULL = 2,
-  XWS_TASK_
 };
 
 typedef struct load_state{
   unsigned very_low; // > 0
   unsigned low;
   unsigned high;
-} load_state_t;
+} load_state_t __attribute__((aligned(64)));
 
 typedef struct load_info_cell{
   long long ldi; // load index
@@ -885,7 +884,7 @@ typedef struct load_info{
   long long tsum; // total accumulated sum of tasks. owner: me
   long long *tsums; // total prefix sum of tasks owner: me
   volatile load_info_cell_t *lds; // loads, ower: all
-} load_info_t;
+} load_info_t __attribute__((aligned(64)));
 
 typedef struct xws {
   unsigned batch_size; // batch size of requests sent at each round; init early

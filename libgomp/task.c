@@ -121,11 +121,15 @@ static inline void xws_init(){
 	struct gomp_thread *thr = gomp_thread();
 	xws_t *xws = &thr->xws;
 
-	memset(xws, 0, sizeof(xws_t)); // set all to 0
 	xws->batch_size = XWS_BATCH_SIZE < thr->num_queues - 1 ? XWS_BATCH_SIZE : thr->num_queues - 1;
 	xws->ld_states.very_low = (unsigned) XWS_VERY_LOW * thr->num_queues;
 	xws->ld_states.low = (unsigned) XWS_LOW * thr->num_queues;
 	xws->ld_states.high = (unsigned) XWS_HIGH * thr->num_queues;
+
+	xws->flag = XWS_INIT_VAL;
+	xws->nreqs = 0;
+	xws->round = 1;
+	xws->req = 0;
 
 	// allocate memory for sum and lds
 	xws->ld_info.tsums = (long long *)gomp_malloc(sizeof(long long) * thr->num_queues);
@@ -134,6 +138,7 @@ static inline void xws_init(){
 	for(int i = 0; i < thr->num_queues; i++){
 		xws->ld_info.lds[i].ldi = 0;
 		xws->ld_info.lds[i].visited = false;
+
 	}
 // 	memset(xws->ld_info.lds, 0, sizeof(load_info_cell_t) * thr->num_queues);
 }
@@ -147,25 +152,47 @@ static void xws_reset(){
 	}
 }
 
-static inline void xws_update_loads(){
+static inline void xws_update_loads(int qid){
 	struct gomp_thread *thr = gomp_thread();
 	xws_t *xws = &thr->xws;
 	load_info_t *ld_info = &xws->ld_info;
-
-	// accumulated prefix sum, each iter, we update the load of one queue
-	ld_info->tsum += thr->td_task_q[ld_info->qid]->nin - thr->td_task_q[ld_info->qid]->nout;
-	// save this accumulated prefix sum for further load calculation
-	// TODO: we can batch this if necessary
-	ld_info->tsums[ld_info->qid] = ld_info->tsum;
-
-
-	int next_qid = ld_info->qid + 1 < thr->num_queues ? ld_info->qid + 1 : 0;
 	int tid = thr->ts.team_id;
+	// xtask_debug(0, 1, "enters.");
 
-	// update load index
-	ld_info->lds[tid].ldi = ld_info->tsums[ld_info->qid] - ld_info->tsums[next_qid];
+	int next_qid;
+	if(qid == -1){
+		// default action
+		// accumulated prefix sum, each iter, we update the load of one queue
+		ld_info->tsum += thr->td_task_q[ld_info->qid]->nin - thr->td_task_q[ld_info->qid]->nout;
+		// save this accumulated prefix sum for further load calculation
+		// TODO: we can batch this if necessary
+		ld_info->tsums[ld_info->qid] = ld_info->tsum;
 
-	ld_info->qid = next_qid;
+
+		next_qid = ld_info->qid + 1 < thr->num_queues ? ld_info->qid + 1 : 0;
+		
+		// update load index
+		ld_info->lds[tid].ldi = ld_info->tsums[ld_info->qid] - ld_info->tsums[next_qid];
+
+		ld_info->qid = next_qid;
+	}else{
+		xtask_debug(0, 1, "etners. qid=%d.", qid);
+		// there is a specific qid we want to update
+		while(qid != ld_info->qid){
+			ld_info->tsum += thr->td_task_q[ld_info->qid]->nin - thr->td_task_q[ld_info->qid]->nout;
+			ld_info->tsums[ld_info->qid] = ld_info->tsum;
+			next_qid = ld_info->qid + 1 < thr->num_queues ? ld_info->qid + 1 : 0;
+			ld_info->lds[tid].ldi = ld_info->tsums[ld_info->qid] - ld_info->tsums[next_qid];
+			ld_info->qid = next_qid;
+		}
+	}
+
+}
+
+static inline void xws_update_load(int ttid){
+	struct gomp_thread *thr = gomp_thread();
+	xws_t *xws = &thr->xws;
+	thr->thread_pool->threads[ttid]->xws.ld_info.lds[thr->ts.team_id].ldi = xws->ld_info.lds[thr->ts.team_id].ldi;
 }
 
 bool xws_find_victims(int n){
@@ -241,7 +268,7 @@ static int xws_push_tasks(int ttid, int n, unsigned long * last_qid){
 			
 		}
 	}
-	
+
 	if(npushed)
 		return TASK_SUCCESSFULLY_PUSHED;
 	
@@ -260,6 +287,8 @@ bool xws_send_reqs(){
 	if(xws->flag == XWS_STEALING)
 		return false;
 
+	xtask_debug(0, 1, "start stealing. nreqs=%d", xws->nreqs);
+
 	bool find_victims = xws_find_victims(xws->batch_size);
 
 	if(!find_victims)
@@ -277,23 +306,30 @@ bool xws_send_reqs(){
 }
 
 bool xws_handle_reqs(unsigned long *last_qid){
+	
 	struct gomp_thread *thr = gomp_thread();
 	xws_t *xws = &thr->xws;
 	int tid = thr->ts.team_id;
 	xws->flag = XWS_INIT_VAL; // I no longer steal, since this is called when tasks found
-
-	xws_update_loads();
-
+	
 	// check load, and only respond when my load is high
 	if(xws->ld_info.lds[tid].ldi >= xws->ld_states.high){
+		// xtask_debug(0, 0, "enters. Load=%lld/%d, req=", xws->ld_info.lds[tid].ldi, xws->ld_states.high);
 		uint64_t round = XWS_REQ_TO_ROUND(xws->req);
 		int ttid = XWS_REQ_TO_TID(xws->req);
+		// xtask_debug(0, 1, "load high");
 		if(round == xws->round){
+			xtask_debug(0, 1, "handle_req, load=%lld, ttid=%d, round=%ld, req=%ld", xws->ld_info.lds[tid].ldi, ttid, round, xws->req);
 			// remove tasks from my side and push to the thief
-			xws_push_tasks(ttid, INITIAL_TASK_DEQUE_SIZE, last_qid);
+			xws_push_tasks(ttid, xws->batch_size, last_qid);
+			// upload the load info
+			xws_update_loads((int)(*last_qid));
+			xws_update_load(ttid);
+			xws->round++;
 			return true;
 		}
 	}
+	xws_update_loads(-1);
 	return false;
 }
 
@@ -301,29 +337,6 @@ bool xws_handle_reqs(unsigned long *last_qid){
 
 #endif // XTASK_LLWS
 
-
-#ifdef GOMP_USE_XWS
-
-
-#define QOPS_MASK (1<<10) - 1 //mask
-#define MAX_BALANCE_ATTEMPTS 10
-#define XWS_BATCH_SIZE 32
-#define XWS_SQ_SIZE INITIAL_TASK_DEQUE_SIZE<<2  /*just try 4 batches*/
-/**
- * WL_INDEX_HIGH - workload index is high
- * WL_INDEX_LOW - workload index is low
-*/
-#define WL_INDEX_HIGH (INITIAL_TASK_DEQUE_SIZE >> 1)
-#define WL_INDEX_LOW (INITIAL_TASK_DEQUE_SIZE >> (INITIAL_TASK_BITS/2)) // is this even allowd?
-enum {
-	XWS_BALANCE_IGNORED,
-	XWS_BALANCE_SUCCESS,
-	XWS_BALANCE_FAILED,
-	XWS_BALANCE_SQ_EMPTY,
-};
-
-
-#endif // GOMP_USE_XWS
 
 // declare the functions
 void gomp_alloc_task_q(struct gomp_thread *);
@@ -343,20 +356,6 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	// thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * thr->num_queues);
 	thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * (thr->num_queues + 1)); // with xws
 	for (int queue_id = 0; queue_id < thr->num_queues + 1; queue_id++){
-		#ifdef GOMP_USE_XWS
-		if(queue_id == 0 || queue_id == thr->num_queues){
-			thr->td_task_q[queue_id] = (struct gomp_taskq *)gomp_malloc(sizeof(struct gomp_taskq));
-			thr->td_task_q[queue_id]->td_deque = (volatile struct gomp_task **)gomp_malloc(sizeof(struct gomp_task *) * XWS_SQ_SIZE);
-			thr->td_task_q[queue_id]->td_deque_head = 0;
-			thr->td_task_q[queue_id]->td_deque_tail = 0;
-			thr->td_task_q[queue_id]->nin = 0;
-			thr->td_task_q[queue_id]->nout = 0;
-			thr->td_task_q[queue_id]->td_deque_size = XWS_SQ_SIZE;
-			for(int i = 0; i < thr->td_task_q[queue_id]->td_deque_size; i++){
-				thr->td_task_q[queue_id]->td_deque[i] = NULL;
-			}
-		}else{
-		#endif // GOMP_USE_XWS
 			thr->td_task_q[queue_id] = (struct gomp_taskq *)gomp_malloc(sizeof(struct gomp_taskq));
 			thr->td_task_q[queue_id]->td_deque = (volatile struct gomp_task **)gomp_malloc(sizeof(struct gomp_task *) * INITIAL_TASK_DEQUE_SIZE);
 			thr->td_deque_size = INITIAL_TASK_DEQUE_SIZE;
@@ -376,118 +375,13 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 		#ifdef GOMP_USE_XWS
 		}
 		#endif // GOMP_USE_XWS
-	 xws_init();
+	#ifdef XTASK_LLWS
+	xws_init();
+	#endif
 	}
-/**
- * XWS - XWorkStealing
-*/
-#ifdef GOMP_USE_XWS
-	thr->nqops = 0;
-	thr->wlb_failed_attampts = 0;
-	thr->ws_failed_attampts = 0;
-	thr->wl_idx_high = thr->num_queues * WL_INDEX_HIGH;
-	thr->wl_idx_low = thr->num_queues * WL_INDEX_LOW;
-	thr->wl_idxes = (unsigned long *)gomp_malloc(sizeof(unsigned long) * thr->num_queues);
-	memset(thr->wl_idxes, 0, sizeof(unsigned long) * thr->num_queues);
-	GOMP_ATOMIC_ST_RLX(&thr->ws_lock, 0);
-#endif // GOMP_USE_XWS
 	return;
 };
 
-#ifdef GOMP_USE_XWS
-static inline unsigned int get_workload_index(){
-	struct gomp_thread *thr = gomp_thread();
-	unsigned int idx = 0;
-	for(int i = 0; i < thr->num_queues; i++){
-		idx += thr->td_task_q[i]->nin - thr->td_task_q[i]->nout;
-	}
-	return idx;
-}
-
-/**
- * XWS - XWorkStealing
- * Try to lock the shared q
- * @return true if the lock is successful, false otherwise.
-*/
-static inline bool sq_try_lock(unsigned int *lock){
-	struct gomp_thread *thr = gomp_thread();
-	int tid = thr->ts.team_id;
-	int zero = 0; //TODO: Maybe simpiler implementation? according to the doc, it will change the expect val, which is weird
-	return GOMP_ATOMIC_CMPXCHG(lock, &zero, tid); // lock by me from state 0 
-}
-/**
- * XWS - XWorkStealing
- * unlock the shared q
- * @return true if the unlock is successful, false otherwise.
-*/
-static inline bool sq_unlock(unsigned int *lock){
-	struct gomp_thread *thr = gomp_thread();
-	int tid = thr->ts.team_id;
-	return GOMP_ATOMIC_CMPXCHG(lock, &tid, 0); // unlock by me from state tid
-}
-/**
- * XWS - XWorkStealing
- * lock the shared q: wait until the lock is successful
-*/
-static inline void sq_lock(unsigned int *lock){
-	struct gomp_thread *thr = gomp_thread();
-	int tid = thr->ts.team_id;
-	int zero = 0;
-	while(GOMP_ATOMIC_CMPXCHG(lock, &zero, tid) != 0){
-		zero = 0;
-	}
-}
-
-/**
- * Move tasks to the shared q
- * if the shared q is full, return. It is ok to read shared var outside of the lock, since it is estimation
- * moving from my q to shared q don't need to be protected by the lock, as it is a single producer multiple consumers.
- * only lock when consume
-*/
-static inline int tosq(){
-	struct gomp_thread *thr = gomp_thread();
-	// TODO: push a batch of tasks to the the shared q
-}
-
-/**
- * Move tasks from the shared q
- * This is called when load is low and the shared q is not empty
-*/
-static inline int fromsq(){
-	struct gomp_thread *thr = gomp_thread();
-	// check the workload indx
-	// try lock the sq
-	bool ret = sq_try_lock(&thr->sq_lock);
-	if(!ret){
-		if(++thr->ws_failed_attampts > MAX_BALANCE_ATTEMPTS){
-			thr->ws_failed_attampts = 0;
-			sq_lock(&thr->sq_lock);
-		}else{
-			return XWS_BALANCE_IGNORED;
-		}
-	}
-}
-
-/**
- * XWS - XWorkStealing
- * Balance the xq and sq in current thread if certain condition is met.
- * First check if it is the right interval to balance
- * Then check the wl_idx, if wl_idx is high or low, balance the queues
- * @return 1 if the balance is successful, 0 otherwise.
-*/
-static inline int balance_sq(){
-	struct gomp_thread *thr = gomp_thread();
-	if(__builtin_expect(!(thr->nqops & QOPS_MASK), 1))
-		return XWS_BALANCE_IGNORED;
-	int gtid = thr->ts.team_id;
-	// update my workload index
-	thr->wl_idxes[gtid] = get_workload_index();
-	// check the wl_idx,
-	if(thr->wl_idxes[gtid] > thr->wl_idx_high)
-
-
-}
-#endif // GOMP_USE_XWS
 
 
 static int
@@ -2404,7 +2298,9 @@ while(1){
 			#endif // XTASK_LLWS
 			xperflog_record(XPERF_STALL_END | XPERF_BAR, bar_fref, bar_fref);
 		} else{
+			#ifdef XTASK_LLWS
 			xws_send_reqs();
+			#endif
 			xperflog_record(XPERF_BAR_END| XPERF_STALL, bar_fref, bar_fref);
 			break;
 		}
