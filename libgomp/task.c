@@ -268,7 +268,7 @@ static int xws_push_tasks(int ttid, int n, unsigned long * last_qid){
 	struct gomp_thread *thr = gomp_thread();
 	struct gomp_thread *target_thr = thr->thread_pool->threads[ttid];
 	int tid = thr->ts.team_id;
-	int target_qid = tid - ttid < 0 ? tid - ttid + thr->num_queues : tid - ttid;
+	int target_qid = ttid - tid < 0 ? ttid - tid + thr->num_queues : ttid - tid;
 
 
 	// First remove aux queue - I think it is good for locality since my tasks are created localy
@@ -307,9 +307,9 @@ static int xws_push_tasks(int ttid, int n, unsigned long * last_qid){
 			*last_qid = qid;
 			task_q->nout++;
 			
-			if(npushed++ >= n){
-				return TASK_SUCCESSFULLY_PUSHED;
-			}
+			if(npushed++ >= n)
+				return npushed;
+			
 		}
 		num_q_accessed++;
 		qid = qid + 1 < thr->num_queues ? qid + 1 : 0;
@@ -419,13 +419,11 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 			for(int i = 0; i < thr->td_deque_size; i++){
 				thr->td_task_q[queue_id]->td_deque[i] = NULL;
 			}
-		#ifdef GOMP_USE_XWS
-		}
-		#endif // GOMP_USE_XWS
+	}
 	#ifdef XTASK_LLWS
 	xws_init();
 	#endif
-	}
+
 	return;
 };
 
@@ -2343,12 +2341,18 @@ while(1){
 			#ifdef XTASK_LLWS
 			xws_handle_reqs(&last_qid);
 			#endif // XTASK_LLWS
+
+			#ifdef GOMP_USE_XPERFLOG
 			xperflog_record(XPERF_STALL_END | XPERF_BAR, bar_fref, bar_fref);
+			#endif // GOMP_USE_XPERFLOG
 		} else{
 			#ifdef XTASK_LLWS
 			xws_send_reqs();
 			#endif
+			#ifdef GOMP_USE_XPERFLOG
 			xperflog_record(XPERF_BAR_END| XPERF_STALL, bar_fref, bar_fref);
+			#endif // GOMP_USE_XPERFLOG
+
 			break;
 		}
 
@@ -2646,7 +2650,9 @@ GOMP_taskwait (void)
 				#ifdef XTASK_LLWS
 				xws_send_reqs();
 				#endif
+				#ifdef GOMP_USE_XPERFLOG
 				xperflog_record(XPERF_TASKWAIT_END | XPERF_STALL, taskwait_fref, taskwait_fref);
+				#endif
 				continue;
 			}else{
 				#ifdef XTASK_LLWS
@@ -2657,7 +2663,9 @@ GOMP_taskwait (void)
 
 			if (next_task->kind == GOMP_TASK_WAITING)
 			{	
+				#ifdef GOMP_USE_XPERFLOG
 				xperflog_record(XPERF_STALL_END | XPERF_TASKWAIT, taskwait_fref, taskwait_fref);
+				#endif
 				child_task = next_task;
 				child_task->kind = GOMP_TASK_TIED; // move this out of gomp_task_run_pre, so it only handles barriers
 				child_task->in_tied_task = true;
