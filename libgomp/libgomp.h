@@ -75,7 +75,8 @@
 #define GOMP_USE_XQUEUE 1
 // #define GOMP_USE_XWS 1 // use xworkshares/workstealing
 #define GOMP_USE_XPERFLOG 1
-#define XTASK_LLWS 1
+// #define XTASK_LLWS 1
+// #define XTASK_SWS 1 // simple ws
 
 
 /* If we were a C++ library, we'd get this from <std/atomic>.  */
@@ -845,6 +846,47 @@ struct xflag{
 }
 __attribute__((aligned(64)));
 
+#ifdef XTASK_SWS // simple workstealing
+
+#define HIGH_LOAD (INITIAL_TASK_DEQUE_SIZE * 4 / 8)
+#define LOW_LOAD (INITIAL_TASK_DEQUE_SIZE * 1 / 8)
+
+
+#define WS_REQ_SENT 0
+#define WS_REQ_FAILED 1
+#define WS_REQ_PENDING 2
+
+// push tasks related
+#define WS_TASK_NOT_PUSHED 0
+#define WS_TASK_PUSHED 1
+
+#define WS_TID2REQ(a) ((uint64_t)(a) << 40)
+#define WS_REQ2ROUND(a) ((a) & (uint64_t)((1ULL << 40) - 1))
+#define WS_REQ2TID(a) ((int)((a) >> 40))
+
+enum wsflag{
+WS_INITIAL = 0,
+WS_STEALING = 1,
+};
+typedef struct wsload_info{
+  long long high_load;
+  long long low_load;
+} ws_load_info_t;
+
+typedef struct ws_info{
+  ws_load_info_t info;
+  volatile uint64_t round;
+  volatile uint64_t req;
+  volatile long long load; // updated by thief or me after push; ok to have race
+  int last_thr;
+  unsigned long last_qid;
+  enum wsflag flag;
+  // long long *loads;
+} wsi_t;
+
+#endif
+
+
 #ifdef XTASK_LLWS
 /**
  * XWS related fields.
@@ -1002,6 +1044,10 @@ struct gomp_thread
 #ifdef XTASK_LLWS
   xws_t xws;
 #endif // XTASK_LLWS
+
+#ifdef XTASK_SWS
+  wsi_t wsi;
+#endif // XTASK_SWS
 
 #ifdef GOMP_USE_XWS
   /**

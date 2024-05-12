@@ -61,10 +61,149 @@ htab_eq (hash_entry_type x, hash_entry_type y)
 }
 
 #ifdef GOMP_USE_XQUEUE
-
+// declare the functions
+void gomp_alloc_task_q(struct gomp_thread *);
 static int gomp_push_task(struct gomp_task *);
 static gomp_task_t* gomp_remove_my_task();
 static gomp_task_t* gomp_remove_aux_task(unsigned long *);
+
+
+#ifdef XTASK_SWS // simple workstealing
+// declarations;
+static inline void xtask_ws_init();
+static int xtask_steal_req();
+static void xtask_handle_req();
+static inline long long xtask_get_load(int tid);
+static inline int xtask_ws_push_tasks(int n, int ttid, unsigned long *last_qid);
+
+
+static inline void xtask_ws_init(){
+	struct gomp_thread *thr = gomp_thread();
+	wsi_t *wsi = &thr->wsi;
+	wsi->info.high_load = thr->num_queues * HIGH_LOAD;
+	wsi->info.low_load = thr->num_queues * LOW_LOAD;
+	wsi->round = 1;
+	wsi->req = 0;
+
+	wsi->flag = WS_INITIAL;
+	wsi->last_thr = 0;
+	wsi->load = 0;
+
+}
+
+static inline long long xtask_get_load(int tid){
+	struct gomp_thread *thr = gomp_thread()->thread_pool->threads[tid];
+	struct gomp_taskq **taskq = thr->td_task_q;
+	long long load = 0;
+	for(int i = 0; i < thr->num_queues; i++){
+		load += taskq[i]->nin - taskq[i]->nout;
+	}
+	return load;
+}
+
+
+static int xtask_steal_req(){
+	struct gomp_thread *thr = gomp_thread();
+	wsi_t *wsi = &thr->wsi;
+	if(wsi->flag == WS_STEALING)
+		return WS_REQ_PENDING;
+
+	int last_thr = wsi->last_thr;
+	for(int i = last_thr, j = 0; j < thr->num_queues; j++){
+		int ttid = i < thr->num_queues ? i : 0; // target thid
+		struct gomp_thread *vthr = thr->thread_pool->threads[ttid]; // victim thread
+		long long load = xtask_get_load(ttid);
+		vthr->wsi.load = load;
+
+		if(load > wsi->info.high_load){
+			// xtask_debug(0, 1, "highload: load=%lld, high_load=%lld", load, wsi->info.high_load);
+			if(WS_REQ2ROUND(vthr->wsi.req) < vthr->wsi.round){
+				// send req
+				uint64_t round = vthr->wsi.round;
+				vthr->wsi.req = WS_TID2REQ(thr->ts.team_id) | round;
+				wsi->last_thr = i;
+
+				// xtask_debug(0, 1, "send req to T#%d, load=%lld, round=%ld", ttid, load, round);
+				wsi->flag = WS_STEALING;
+				return WS_REQ_SENT;
+			}
+		}
+		i++;
+	}
+	return WS_REQ_FAILED;
+}
+
+static inline int xtask_ws_push_tasks(int n, int ttid, unsigned long *last_qid){
+	struct gomp_thread *thr = gomp_thread();
+	// wsi_t *wsi = &thr->wsi;
+	int tid = thr->ts.team_id;
+
+	struct gomp_thread *thief_thr = thr->thread_pool->threads[ttid];
+	
+	
+	// 
+	//	    kmp_uint64 last_q = (stealer_id < gtid) ? task_team->tt.tt_nproc + stealer_id - gtid :
+	//      stealer_id - gtid; //abs((kmp_int64)stealer_id - (kmp_int64)gtid);
+
+	// this is the queue I from the thief where I can enqueue tasks
+	int thief_qid_of_me = ttid < tid ? thr->num_queues + ttid - tid : ttid - tid;
+	struct gomp_taskq *thief_task_q = thief_thr->td_task_q[thief_qid_of_me];
+	
+
+
+	gomp_task_t *task = NULL;
+	int num_tries = 0;
+	int npushed = 0;
+	do{
+		// first check if the thief's q of mine is full
+		while(thief_task_q->td_deque[thief_task_q->td_deque_head] != NULL){
+			num_tries++;
+			if(num_tries < 25)
+				continue;
+			return npushed;
+		}
+		// there is an empty slot, we remove tasks from my q
+		task = (gomp_task_t *) gomp_remove_aux_task(last_qid);
+		if(task == NULL)
+			task = (gomp_task_t *) gomp_remove_my_task();
+		if(task == NULL)
+			return npushed;
+
+		thief_task_q->nin++;
+		thief_task_q->td_deque[thief_task_q->td_deque_head] = task;
+		thief_task_q->td_deque_head = (thief_task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
+		thief_thr->last_q_accessed = thief_qid_of_me;
+
+		npushed++;
+	}while(task != NULL && npushed < n);
+
+	return npushed;
+}
+
+
+static void xtask_handle_req(unsigned long *last_qid){
+	struct gomp_thread *thr = gomp_thread();
+	// int tid = thr->ts.team_id;
+	wsi_t *wsi = &thr->wsi;
+	wsi->flag = WS_INITIAL;
+
+	// we don't need to update the round info as it is already updated by the thief
+	// we only check if there is any request, if I got request, the thief think I have high load
+	if(wsi->round == WS_REQ2ROUND(wsi->req)){
+		// push tasks to thief
+		int npushed = xtask_ws_push_tasks(8, WS_REQ2TID(wsi->req), last_qid);
+		wsi->load -= npushed;
+		wsi->round++;
+		// xtask_debug(0, 1, "request found from T#%d, npushed=%d, round=%ld", WS_REQ2TID(wsi->req), npushed, wsi->round);
+	}
+}
+
+
+
+#endif
+
+
+
 
 #ifdef XTASK_LLWS
 /**
@@ -385,11 +524,7 @@ bool xws_handle_reqs(unsigned long *last_qid){
 #endif // XTASK_LLWS
 
 
-// declare the functions
-void gomp_alloc_task_q(struct gomp_thread *);
-static int gomp_push_task(struct gomp_task *);
-static gomp_task_t* gomp_remove_my_task();
-static gomp_task_t* gomp_remove_aux_task(unsigned long *);
+
 
 
 void
@@ -422,6 +557,9 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	}
 	#ifdef XTASK_LLWS
 	xws_init();
+	#endif
+	#ifdef XTASK_SWS
+	xtask_ws_init();
 	#endif
 
 	return;
@@ -2342,12 +2480,20 @@ while(1){
 			xws_handle_reqs(&last_qid);
 			#endif // XTASK_LLWS
 
+			#ifdef XTASK_SWS
+			xtask_handle_req(&last_qid);
+			#endif // XTASK_SWS
+
 			#ifdef GOMP_USE_XPERFLOG
 			xperflog_record(XPERF_STALL_END | XPERF_BAR, bar_fref, bar_fref);
 			#endif // GOMP_USE_XPERFLOG
 		} else{
 			#ifdef XTASK_LLWS
 			xws_send_reqs();
+			#endif
+
+			#ifdef XTASK_SWS
+			xtask_steal_req();
 			#endif
 			#ifdef GOMP_USE_XPERFLOG
 			xperflog_record(XPERF_BAR_END| XPERF_STALL, bar_fref, bar_fref);
@@ -2650,13 +2796,23 @@ GOMP_taskwait (void)
 				#ifdef XTASK_LLWS
 				xws_send_reqs();
 				#endif
+
+				#ifdef XTASK_SWS
+				xtask_steal_req();
+				#endif
+
 				#ifdef GOMP_USE_XPERFLOG
 				xperflog_record(XPERF_TASKWAIT_END | XPERF_STALL, taskwait_fref, taskwait_fref);
 				#endif
 				continue;
 			}else{
+
 				#ifdef XTASK_LLWS
 				xws_handle_reqs(&last_qid);
+				#endif
+
+				#ifdef XTASK_SWS
+				xtask_handle_req(&last_qid);
 				#endif
 			}
 			
