@@ -191,7 +191,7 @@ static void xtask_handle_req(unsigned long *last_qid){
 	// we only check if there is any request, if I got request, the thief think I have high load
 	if(wsi->round == WS_REQ2ROUND(wsi->req)){
 		// push tasks to thief
-		int npushed = xtask_ws_push_tasks(8, WS_REQ2TID(wsi->req), last_qid);
+		int npushed = xtask_ws_push_tasks(2, WS_REQ2TID(wsi->req), last_qid);
 		wsi->load -= npushed;
 		wsi->round++;
 		// xtask_debug(0, 1, "request found from T#%d, npushed=%d, round=%ld", WS_REQ2TID(wsi->req), npushed, wsi->round);
@@ -2480,24 +2480,28 @@ while(1){
 			xws_handle_reqs(&last_qid);
 			#endif // XTASK_LLWS
 
+
 			#ifdef XTASK_SWS
 			xtask_handle_req(&last_qid);
 			#endif // XTASK_SWS
-
+			
 			#ifdef GOMP_USE_XPERFLOG
 			xperflog_record(XPERF_STALL_END | XPERF_BAR, bar_fref, bar_fref);
 			#endif // GOMP_USE_XPERFLOG
+			
 		} else{
 			#ifdef XTASK_LLWS
 			xws_send_reqs();
 			#endif
+			
+			#ifdef GOMP_USE_XPERFLOG
+			xperflog_record(XPERF_BAR_END| XPERF_STALL, bar_fref, bar_fref);
+			#endif // GOMP_USE_XPERFLOG
 
 			#ifdef XTASK_SWS
 			xtask_steal_req();
 			#endif
-			#ifdef GOMP_USE_XPERFLOG
-			xperflog_record(XPERF_BAR_END| XPERF_STALL, bar_fref, bar_fref);
-			#endif // GOMP_USE_XPERFLOG
+
 
 			break;
 		}
@@ -2792,17 +2796,16 @@ GOMP_taskwait (void)
 			
 				next_task = gomp_remove_aux_task(&last_qid);
 			}
+			// Taskwait
 			if(next_task == NULL){
 				#ifdef XTASK_LLWS
 				xws_send_reqs();
 				#endif
-
-				#ifdef XTASK_SWS
-				xtask_steal_req();
-				#endif
-
 				#ifdef GOMP_USE_XPERFLOG
 				xperflog_record(XPERF_TASKWAIT_END | XPERF_STALL, taskwait_fref, taskwait_fref);
+				#endif
+				#ifdef XTASK_SWS
+				xtask_steal_req();
 				#endif
 				continue;
 			}else{

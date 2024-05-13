@@ -76,7 +76,7 @@
 // #define GOMP_USE_XWS 1 // use xworkshares/workstealing
 #define GOMP_USE_XPERFLOG 1
 // #define XTASK_LLWS 1
-// #define XTASK_SWS 1 // simple ws
+#define XTASK_SWS 1 // simple ws
 
 
 /* If we were a C++ library, we'd get this from <std/atomic>.  */
@@ -882,7 +882,7 @@ typedef struct ws_info{
   unsigned long last_qid;
   enum wsflag flag;
   // long long *loads;
-} wsi_t;
+} wsi_t __attribute__((aligned(64)));
 
 #endif
 
