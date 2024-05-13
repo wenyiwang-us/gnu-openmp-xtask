@@ -525,7 +525,70 @@ bool xws_handle_reqs(unsigned long *last_qid){
 
 
 
+#ifdef XTASK_RANDOM_WS
+/**
+ * Random generator from stackoverflow
+*/
+unsigned short lfsr = 0xACE1u;
+unsigned bit;
+unsigned myrand(){
+    bit  = ((lfsr >> 0) ^ (lfsr >> 2) ^ (lfsr >> 3) ^ (lfsr >> 5) ) & 1;
+    return lfsr =  (lfsr >> 1) | (bit << 15);
+}
 
+static inline void rws_init(){
+	struct gomp_thread *thr = gomp_thread();
+	rws_t *rws = &thr->rws;
+	rws->round = 1;
+	rws->req = 0;
+	rws->flag = RWS_INIT_VAL;
+	rws->batch_size = RWS_BATCH_SIZE < thr->num_queues - 1 ? RWS_BATCH_SIZE : thr->num_queues - 1;
+	for(int i = 0; i < rws->batch_size; i++){
+		rws->victims[i] = 0;
+	}
+}
+
+static void find_victims(int n){
+	struct gomp_thread *thr = gomp_thread();
+	rws_t *rws = &thr->rws;
+	for(int i = 0; i < n; i++){
+		rws->victims[i] = abs(myrand() % thr->num_queues);
+	}
+}
+
+static inline int steal_req(){
+	struct gomp_thread *thr = gomp_thread();
+	rws_t *rws = &thr->rws;
+	if(rws->flag == RWS_STEALING)
+		return RWS_STEAL_PENDING;
+	find_victims(rws->batch_size);
+	for(int i = 0; i < rws->batch_size; i++){
+		int ttid = rws->victims[i];
+		struct gomp_thread *vthr = thr->thread_pool->threads[ttid];
+		if(WS_REQ2ROUND(vthr->rws.req) < vthr->rws.round){
+			vthr->rws.req = (WS_TID2REQ(thr->ts.team_id) | vthr->rws.round);
+			// xtask_debug(0, 0, "send req to T#%d, their_round=%ld, their_req=%ld", ttid, vthr->rws.round, vthr->rws.req);
+			// vthr->rws.flag = RWS_REQ_RECEIVED;
+			rws->flag = RWS_STEALING;
+			return RWS_STEAL_SENT;
+		}
+	}
+	return RWS_STEAL_FAILED;
+}
+
+// // called by push_tasks
+// static inline int check_req(){
+// 	struct gomp_thread *thr = gomp_thread();
+// 	rws_t *rws = &thr->rws;
+// 	if(rws->round == WS_REQ2ROUND(rws->req)){
+// 		// push tasks to thief
+// 		rws->round++;
+// 		return WS_REQ2TID(rws->req);
+// 	}
+// 	return -1;
+// }
+
+#endif // XTASK_RANDOM_WS
 
 void
 gomp_alloc_task_q(struct gomp_thread *thr){
@@ -542,7 +605,6 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 			thr->td_task_q[queue_id]->td_deque = (volatile struct gomp_task **)gomp_malloc(sizeof(struct gomp_task *) * INITIAL_TASK_DEQUE_SIZE);
 			thr->td_deque_size = INITIAL_TASK_DEQUE_SIZE;
 
-			//wenyi: in kmp, these two are assertions
 			thr->td_task_q[queue_id]->td_deque_head = 0;
 			thr->td_task_q[queue_id]->td_deque_tail = 0;
 
@@ -561,6 +623,9 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	#ifdef XTASK_SWS
 	xtask_ws_init();
 	#endif
+	#ifdef XTASK_RANDOM_WS
+	rws_init();
+	#endif
 
 	return;
 };
@@ -575,6 +640,8 @@ gomp_push_task(struct gomp_task *task){
 
 	// Check if deque is full
 	int num_tries = 0;
+
+
 	
 	#ifdef XTASK_WORKSHARE
 	int nthreads = team->nthreads;
@@ -609,6 +676,18 @@ gomp_push_task(struct gomp_task *task){
 	#else
 
 	unsigned long last_q = thr->last_q;
+	#ifdef XTASK_RANDOM_WS
+	rws_t *rws = &thr->rws;
+	// check requests
+	if(rws->round == WS_REQ2ROUND(rws->req)){
+		int ttid = WS_REQ2TID(rws->req);
+		int qid = ttid < gtid ?thr->num_queues + ttid - gtid : ttid - gtid;
+		// xtask_debug(0, 0, "handle_req from T#%d, qid=%d, round=%ld, req=%ld, batchsize=%d, num_queue=%d", ttid, qid, rws->round, rws->req, rws->batch_size, thr->num_queues);
+		last_q = qid;
+		rws->round++;
+	}
+	#endif
+
 	unsigned long target_tid = gtid + last_q; // starting target tid
 
 	target_tid = (target_tid > team->nthreads - 1) ? (target_tid - team->nthreads) : target_tid;
@@ -631,7 +710,7 @@ gomp_push_task(struct gomp_task *task){
 	task_q->nin++; // Will it be reordered by compilers or CPU?. it doesn't matter
 	task_q->td_deque[task_q->td_deque_head] = task;
 	task_q->td_deque_head = (task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
-	target_thr->last_q_accessed = thr->last_q;
+	target_thr->last_q_accessed = last_q;
 
 	if (thr->num_queues > 1){
 		last_q++;
@@ -2480,6 +2559,7 @@ while(1){
 		if(new_victim)
 			new_victim = new_victim;
 
+		// Barrier Handle tasks
 		if(child_task){
 			#ifdef XTASK_LLWS
 			xws_handle_reqs(&last_qid);
@@ -2489,7 +2569,7 @@ while(1){
 			#ifdef XTASK_SWS
 			xtask_handle_req(&last_qid);
 			#endif // XTASK_SWS
-			
+
 			#ifdef GOMP_USE_XPERFLOG
 			xperflog_record(XPERF_STALL_END | XPERF_BAR, bar_fref, bar_fref);
 			#endif // GOMP_USE_XPERFLOG
@@ -2497,6 +2577,10 @@ while(1){
 		} else{
 			#ifdef XTASK_LLWS
 			xws_send_reqs();
+			#endif
+
+			#ifdef XTASK_RANDOM_WS
+			steal_req();
 			#endif
 
 			#ifdef GOMP_USE_XPERFLOG

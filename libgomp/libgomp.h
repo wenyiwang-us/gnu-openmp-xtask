@@ -77,6 +77,7 @@
 // #define GOMP_USE_XPERFLOG 1
 // #define XTASK_LLWS 1
 // #define XTASK_SWS 1 // simple ws
+#define XTASK_RANDOM_WS 1
 
 // #define XTASK_WORKSHARE 1
 
@@ -813,6 +814,33 @@ struct gomp_team
  * 
 */
 
+#ifdef XTASK_RANDOM_WS
+// Work stealing requests
+#define WS_TID2REQ(a) ((uint64_t)(a) << 40) // convert tid to request
+#define WS_REQ2ROUND(a) ((a) & (uint64_t)((1ULL << 40) - 1)) // convert request to round
+#define WS_REQ2TID(a) ((int)((a) >> 40)) // convert request to tid
+
+#define RWS_STEAL_PENDING 0
+#define RWS_STEAL_SENT 1
+#define RWS_STEAL_FAILED 2
+#define RWS_BATCH_SIZE 8
+enum rwsflag{
+  RWS_INIT_VAL = 0,
+  RWS_STEALING = 1,
+  RWS_REQ_RECEIVED = 2,
+
+};
+
+typedef struct rws{
+  volatile uint64_t round;
+  volatile uint64_t req;
+  enum rwsflag flag;
+  int batch_size;
+  int victims[RWS_BATCH_SIZE];
+} rws_t;
+
+#endif
+
 /* This structure contains task queue for xqueue implementation. */
 struct gomp_taskq{
   volatile struct gomp_task **td_deque; // task queue, an array of tasks' pointers
@@ -862,9 +890,7 @@ __attribute__((aligned(64)));
 #define WS_TASK_NOT_PUSHED 0
 #define WS_TASK_PUSHED 1
 
-#define WS_TID2REQ(a) ((uint64_t)(a) << 40)
-#define WS_REQ2ROUND(a) ((a) & (uint64_t)((1ULL << 40) - 1))
-#define WS_REQ2TID(a) ((int)((a) >> 40))
+
 
 enum wsflag{
 WS_INITIAL = 0,
@@ -1051,21 +1077,10 @@ struct gomp_thread
   wsi_t wsi;
 #endif // XTASK_SWS
 
-#ifdef GOMP_USE_XWS
-  /**
-   * XWS related fields.
-   * Need cache& cachline optimization
-   * May need redesign a new data structure xq so the q ops don't go through the cache
-   * Further implementation can try
-  */
- unsigned int ws_lock; // simple test-and-set implementation of shared_q lock
- unsigned int *wl_idxes; // an array of workload indexes
- unsigned long long nqops; // number of queue operations
- unsigned int wlb_failed_attampts; // number of workload balance attempts
- unsigned int ws_failed_attampts; // number of failed ws attempts
- unsigned int wl_idx_high;
-  unsigned int wl_idx_low;
-#endif // GOMP_USE_XWS
+#ifdef XTASK_RANDOM_WS
+  rws_t rws;
+#endif // XTASK_RANDOM_WS
+
 
 #ifdef GOMP_USE_XPERFLOG
   struct xperflog xperflog;
