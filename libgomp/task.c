@@ -572,50 +572,66 @@ gomp_push_task(struct gomp_task *task){
 	struct gomp_thread *thr = gomp_thread();
 	struct gomp_team *team = thr->ts.team;
 	unsigned long gtid = (unsigned long)omp_get_thread_num();
-	// TODO: wenyi: kmp, check tiedness
 
-	// TODO: wenyi: kmp, check serial
+	// Check if deque is full
+	int num_tries = 0;
 	
+	#ifdef XTASK_WORKSHARE
+	int nthreads = team->nthreads;
+	int num_thr_tried = 0;
+	unsigned long last_q = thr->last_q;
+	unsigned long target_tid;
+	struct gomp_thread *target_thr;
 
-	// TODO: kmp, make sure tid and gtid are correct, kmp uses different ways to get tid and gtid
-	// gomp_debug(0, "[tid=%d] wenyi(gomp_push_task): gtid=%ld", omp_get_thread_num(), gtid);
+	do{
+		num_tries = 0;
+		target_tid = gtid + last_q;
+		target_tid = (target_tid > nthreads - 1) ? (target_tid - nthreads) : target_tid;
+		target_thr = thr->thread_pool->threads[target_tid];
+		num_thr_tried++;
+		if (num_thr_tried > 1)
+			return TASK_NOT_PUSHED;
+
+		while(target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
+			num_tries++;
+			if (num_tries < 25)
+				continue;
+			break;
+		}
+
+		if(target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] == NULL)
+			break;
+
+		last_q = last_q + 1 < nthreads ? last_q + 1 : 0;
+
+	}while(1);
+
+	#else
+
 	unsigned long last_q = thr->last_q;
 	unsigned long target_tid = gtid + last_q; // starting target tid
 
 	target_tid = (target_tid > team->nthreads - 1) ? (target_tid - team->nthreads) : target_tid;
-	// gomp_debug(0, "[tid=%d] wenyi(gomp_push_task): target_id=%ld", omp_get_thread_num(), target_id);
+
 	struct gomp_thread *target_thr;
 	// TODO: this is other ways to make sure it is serial
 	if (team->nthreads <= 1)
 		target_thr = thr;
 	else
-		target_thr = thr->thread_pool->threads[target_tid]; //ww: does this pointer the same across threads?
-	// struct gomp_thread *target_thr = thr->thread_pool->threads[target_id]; //wenyi: does this pointer the same across threads?
-	if (target_thr->td_task_q == NULL){
-		gomp_alloc_task_q(target_thr);
-	}
-	// Check if deque is full
-	int num_tries = 0;
+		target_thr = thr->thread_pool->threads[target_tid]; //ww: does this pointer the same across threads? - seems so
+
 	while (target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
 		num_tries++;
 		if (num_tries < 25)
 			continue;
 		return TASK_NOT_PUSHED;
 	}
+	#endif
 	struct gomp_taskq *task_q = target_thr->td_task_q[last_q];
-	task_q->nin++; // Will it be reordered by compilers or CPU?
+	task_q->nin++; // Will it be reordered by compilers or CPU?. it doesn't matter
 	task_q->td_deque[task_q->td_deque_head] = task;
 	task_q->td_deque_head = (task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
-	target_thr->last_q_accessed = last_q;
-
-
-	#ifdef GOMP_USE_XWS
-	thr->nqops++;
-	/**
-	 * The following is only an estimate, 
-	*/
-	target_thr->wl_idxes[thr->ts.team_id] = thr->wl_idxes[thr->ts.team_id] + 1;
-	#endif // GOMP_USE_XWS
+	target_thr->last_q_accessed = thr->last_q;
 
 	if (thr->num_queues > 1){
 		last_q++;
@@ -634,14 +650,11 @@ gomp_remove_my_task(){
 	gomp_task_t *task;
 	struct gomp_thread *thr = gomp_thread();
 
-	if(!thr->num_queues)
-		gomp_alloc_task_q(thr);
 	if (thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_tail] == NULL)
 		return NULL;
 	task = (gomp_task_t *) thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_tail];
 	thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_tail] = NULL;
 	thr->td_task_q[0]->td_deque_tail = (thr->td_task_q[0]->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
-	// wenyi: in kmp, there is a conversion from task to taskdata
 	thr->td_task_q[0]->nout++;
 	return task;
 };
@@ -651,9 +664,7 @@ gomp_remove_aux_task(unsigned long *last_qid){
 	
 	gomp_task_t *task;
 	struct gomp_thread *thr = gomp_thread();
-	// unsigned int tail;
-	if(!thr->num_queues)
-		gomp_alloc_task_q(thr);
+
 	task = NULL;
 	struct gomp_taskq *task_q= NULL;
 	if(thr->last_q_accessed > 0){
@@ -662,7 +673,6 @@ gomp_remove_aux_task(unsigned long *last_qid){
 			task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
 			task_q->td_deque[task_q->td_deque_tail] = NULL;
 			task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
-			// gomp_debug(0, "[tid=%d] 0wenyi(gomp_remove_aux_task): task=%p, queue_id=%ld\n", omp_get_thread_num(), task, *last_qid);
 			*last_qid = thr->last_q_accessed;
 		}
 			
@@ -674,7 +684,6 @@ gomp_remove_aux_task(unsigned long *last_qid){
 				task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
 				task_q->td_deque[task_q->td_deque_tail] = NULL;
 				task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
-				// gomp_debug(0, "[tid=%d] 1wenyi(gomp_remove_aux_task): task=%p, queue_id=%ld\n", omp_get_thread_num(), task, queue_id);
 				*last_qid = queue_id;
 				break;
 			}
@@ -688,19 +697,15 @@ gomp_remove_aux_task(unsigned long *last_qid){
 				task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
 				task_q->td_deque[task_q->td_deque_tail] = NULL;
 				task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
-				// gomp_debug(0, "[tid=%d] 2wenyi(gomp_remove_aux_task): task=%p, queue_id=%ld\n", omp_get_thread_num(), task, queue_id);
 				*last_qid = (queue_id);
 				break;
 			}
 		}
 	}
-	
 
-	// if NULL just NULL, this might be redundant
-	if(task == NULL){
-		return NULL;
-	}
-	task_q->nout++;
+	if(__builtin_expect(task != NULL,1))
+		task_q->nout++;
+	
 	return task;
 };
 
@@ -2493,7 +2498,7 @@ while(1){
 			#ifdef XTASK_LLWS
 			xws_send_reqs();
 			#endif
-			
+
 			#ifdef GOMP_USE_XPERFLOG
 			xperflog_record(XPERF_BAR_END| XPERF_STALL, bar_fref, bar_fref);
 			#endif // GOMP_USE_XPERFLOG
