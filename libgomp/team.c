@@ -375,6 +375,9 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 #ifdef XTASK_SWS
 	xtask_debug(0, 0, "XTASK_SimpleWS enabled.\n");
 #endif
+#ifdef XTASK_RANDOM_BWS
+	xtask_debug(0, 0, "XTASK_RandomBWS enabled.\n");
+#endif
 #endif // GOMP_USE_XQUEUE
 
   if (__builtin_expect (gomp_places_list != NULL, 0) && thr->place == 0)
