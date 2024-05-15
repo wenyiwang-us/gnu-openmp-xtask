@@ -74,10 +74,11 @@
 #endif
 #define GOMP_USE_XQUEUE 1
 // #define GOMP_USE_XWS 1 // use xworkshares/workstealing
-// #define GOMP_USE_XPERFLOG 1
+#define GOMP_USE_XPERFLOG 1
 // #define XTASK_LLWS 1
 // #define XTASK_SWS 1 // simple ws
-#define XTASK_RANDOM_WS 1
+// #define XTASK_RANDOM_WS 1
+#define XTASK_RANDOM_BWS 1 // random batch workstealing
 
 // #define XTASK_WORKSHARE 1
 
@@ -805,6 +806,11 @@ struct gomp_team
 #define TASK_DEQUE_MASK(td) ((td)->td_deque_size - 1)
 #define INITIAL_TASK_BITS 5
 #define INITIAL_TASK_DEQUE_SIZE (1 << INITIAL_TASK_BITS)
+
+// Work Stealing requests, compatible with all the implementation.
+#define WS_TID2REQ(a) ((uint64_t)(a) << 40) // convert tid to request
+#define WS_REQ2ROUND(a) ((a) & (uint64_t)((1ULL << 40) - 1)) // convert request to round
+#define WS_REQ2TID(a) ((unsigned int)((a) >> 40)) // convert request to tid
 /**
  * XWS 
  * TODO: 
@@ -814,12 +820,25 @@ struct gomp_team
  * 
 */
 
+#ifdef XTASK_RANDOM_BWS // random batch workstealing
+
+#define N_VICTIMS 4
+#define N_REQ_CHECKS 4
+#define STEAL_DIVIDER 2 // 2 means half of the tasks are stolen
+#define MAX_WAIT_COUNTDOWN 1000 // in loops
+
+enum rbwsflag{
+  RBWS_INIT_VAL = 0,
+  RBWS_STEALING = 1,
+  RBWS_REQ_RECEIVED = 2,
+};
+
+
+#endif
+
+
 #ifdef XTASK_RANDOM_WS
 // Work stealing requests
-#define WS_TID2REQ(a) ((uint64_t)(a) << 40) // convert tid to request
-#define WS_REQ2ROUND(a) ((a) & (uint64_t)((1ULL << 40) - 1)) // convert request to round
-#define WS_REQ2TID(a) ((int)((a) >> 40)) // convert request to tid
-
 #define RWS_STEAL_PENDING 0
 #define RWS_STEAL_SENT 1
 #define RWS_STEAL_FAILED 2
@@ -847,13 +866,15 @@ struct gomp_taskq{
   unsigned int td_deque_head; // head of the queue
   unsigned int td_deque_tail; // tail of the queue
 
-// #ifdef GOMP_USE_XWS
 /**
  * XWS related fields.
 */
-  unsigned long long nin; // number of tasks pushed in
-  unsigned long long nout; // number of tasks popped out 
-// #endif // GOMP_USE_XWS
+  volatile long long nin; // number of tasks pushed in
+  volatile long long nout; // number of tasks popped out 
+  #ifdef XTASK_RANDOM_BWS
+  volatile uint64_t round;
+  volatile uint64_t req;
+  #endif
 };
 
 /* This structure is used for tree barreir sync, and detect barrier termination*/
@@ -1080,6 +1101,11 @@ struct gomp_thread
 #ifdef XTASK_RANDOM_WS
   rws_t rws;
 #endif // XTASK_RANDOM_WS
+
+#ifdef XTASK_RANDOM_BWS
+  unsigned long last_req_q_accessed;
+  unsigned long last_req_q;
+#endif // XTASK_RANDOM_BWS
 
 
 #ifdef GOMP_USE_XPERFLOG

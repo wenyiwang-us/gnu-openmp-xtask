@@ -61,6 +61,16 @@ htab_eq (hash_entry_type x, hash_entry_type y)
 }
 
 #ifdef GOMP_USE_XQUEUE
+/**
+ * Random generator from stackoverflow
+*/
+unsigned short lfsr = 0xACE1u;
+unsigned bit;
+unsigned myrand(){
+    bit  = ((lfsr >> 0) ^ (lfsr >> 2) ^ (lfsr >> 3) ^ (lfsr >> 5) ) & 1;
+    return lfsr =  (lfsr >> 1) | (bit << 15);
+}
+
 // declare the functions
 void gomp_alloc_task_q(struct gomp_thread *);
 static int gomp_push_task(struct gomp_task *);
@@ -526,15 +536,7 @@ bool xws_handle_reqs(unsigned long *last_qid){
 
 
 #ifdef XTASK_RANDOM_WS
-/**
- * Random generator from stackoverflow
-*/
-unsigned short lfsr = 0xACE1u;
-unsigned bit;
-unsigned myrand(){
-    bit  = ((lfsr >> 0) ^ (lfsr >> 2) ^ (lfsr >> 3) ^ (lfsr >> 5) ) & 1;
-    return lfsr =  (lfsr >> 1) | (bit << 15);
-}
+
 
 static inline void rws_init(){
 	struct gomp_thread *thr = gomp_thread();
@@ -590,6 +592,152 @@ static inline int steal_req(){
 
 #endif // XTASK_RANDOM_WS
 
+#ifdef XTASK_RANDOM_BWS
+
+static inline void send_reqs(){
+	struct gomp_thread *thr = gomp_thread();
+	int nthreads = thr->ts.team->nthreads;
+	unsigned vtid, vqid;
+	for(int i = 0; i < N_VICTIMS; i++){
+		vtid = myrand() % nthreads;
+		vqid = myrand() % nthreads;
+		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
+		// send req to vtid
+		uint64_t round = vthr->td_task_q[vqid]->round;
+		if(WS_REQ2ROUND(vthr->td_task_q[vqid]->req) < round){
+			vthr->td_task_q[vqid]->req = WS_TID2REQ(thr->ts.team_id) | round;
+			vthr->last_req_q_accessed = vqid;
+		}
+	}
+}
+
+static inline void handle_reqs(unsigned long *last_req_q){
+	struct gomp_thread *thr = gomp_thread();
+	unsigned tid = thr->ts.team_id;
+	uint64_t req = 0;
+	struct gomp_taskq *task_q = NULL;
+	int nreqc = 1;
+	int num_tries;
+	bool full;
+
+
+	if(thr->last_req_q_accessed > 0){
+		task_q = thr->td_task_q[thr->last_req_q_accessed];
+		req = task_q->req;
+		if(WS_REQ2ROUND(req) == task_q->round){
+			// xtask_debug(0, 1, "handle_req from T#%d, qid=%lu, round=%lu, req=%lu, nin=%lld, nout=%lld,",
+			// WS_REQ2TID(req), 
+			// thr->last_req_q_accessed, 
+			// task_q->round, 
+			// req,
+			// task_q->nin,
+			// task_q->nout
+			// );
+			// push tasks to thief
+			// if in - out > 2, then we can push half
+						unsigned ttid = WS_REQ2TID(req);
+			struct gomp_thread *tthr = thr->thread_pool->threads[ttid]; //thief thread
+			unsigned qid_of_thief = ttid < tid ? thr->num_queues + ttid - tid : ttid - tid;
+			struct gomp_taskq *thief_task_q = tthr->td_task_q[qid_of_thief];
+
+			long long ntasks = (task_q->nin - task_q->nout) / STEAL_DIVIDER;
+			if(ntasks > 1){
+				for(int i = 0; i < ntasks; i++){
+					num_tries = 0;
+					full = false;
+					while(thief_task_q->td_deque[thief_task_q->td_deque_head] != NULL){
+						num_tries++;
+						if(num_tries < 25)
+							continue;
+						full = true;
+						break;
+					}
+					if(full)
+						break;
+					gomp_task_t *task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
+					task_q->td_deque[task_q->td_deque_tail] = NULL;
+					task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
+					task_q->nout++;
+					// push to thief's q
+
+
+					thief_task_q->nin++;
+					thief_task_q->td_deque[thief_task_q->td_deque_head] = task;
+					thief_task_q->td_deque_head = (thief_task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
+				}
+				
+				tthr->last_q_accessed = qid_of_thief;
+			}	
+			task_q->round++;	
+		}
+	}
+
+	// either the last_req_accessed is 0 or the round is not matched
+	unsigned long qid = *last_req_q;
+	for( ;nreqc < N_REQ_CHECKS && qid > 0; qid--, nreqc++){
+		task_q = thr->td_task_q[qid];
+		req = task_q->req;
+		if(WS_REQ2ROUND(req) == task_q->round){
+			// xtask_debug(0, 1, "handle_req from T#%d, qid=%lu, round=%lu, req=%lu, nin=%lld, nout=%lld,",
+			// WS_REQ2TID(req), 
+			// qid, 
+			// task_q->round, 
+			// req,
+			// task_q->nin,
+			// task_q->nout
+			// );
+			// push tasks to thief
+			// if in - out > 2, then we can push half
+			unsigned ttid = WS_REQ2TID(req);
+			struct gomp_thread *tthr = thr->thread_pool->threads[ttid]; //thief thread
+			unsigned qid_of_thief = ttid < tid ? thr->num_queues + ttid - tid : ttid - tid;
+			struct gomp_taskq *thief_task_q = tthr->td_task_q[qid_of_thief];
+
+			long long ntasks = (task_q->nin - task_q->nout) / STEAL_DIVIDER;
+			if(ntasks > 1){
+				for(int i = 0; i < ntasks; i++){
+					num_tries = 0;
+					full = false;
+					// abort if the thief's q is full
+					while(thief_task_q->td_deque[thief_task_q->td_deque_head] != NULL){
+						num_tries++;
+						if(num_tries < 25)
+							continue;
+						full = true;
+						break;
+					}
+					if(full)
+						break;
+					gomp_task_t *task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
+					task_q->td_deque[task_q->td_deque_tail] = NULL;
+					task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
+					task_q->nout++;
+					// push to thief's q
+
+	
+					thief_task_q->nin++;
+					thief_task_q->td_deque[thief_task_q->td_deque_head] = task;
+					thief_task_q->td_deque_head = (thief_task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
+				}
+				
+				tthr->last_q_accessed = qid_of_thief;
+			}
+
+			task_q->round++;
+		}
+
+	}
+
+
+	if(qid > 0)
+		*last_req_q = qid;
+	else
+		*last_req_q = 0;
+
+}
+
+#endif // XTASK_RANDOM_BWS
+
 void
 gomp_alloc_task_q(struct gomp_thread *thr){
 	if (thr->num_queues == 0)
@@ -608,10 +756,14 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 			thr->td_task_q[queue_id]->td_deque_head = 0;
 			thr->td_task_q[queue_id]->td_deque_tail = 0;
 
-			// #ifdef GOMP_USE_XWS
+
 			thr->td_task_q[queue_id]->nin = 0;
 			thr->td_task_q[queue_id]->nout = 0;
-			// #endif // GOMP_USE_XWS
+
+			#ifdef XTASK_RANDOM_BWS
+			thr->td_task_q[queue_id]->req = 0;
+			thr->td_task_q[queue_id]->round = 1;
+			#endif
 
 			for(int i = 0; i < thr->td_deque_size; i++){
 				thr->td_task_q[queue_id]->td_deque[i] = NULL;
@@ -640,9 +792,6 @@ gomp_push_task(struct gomp_task *task){
 
 	// Check if deque is full
 	int num_tries = 0;
-
-
-	
 	#ifdef XTASK_WORKSHARE
 	int nthreads = team->nthreads;
 	int num_thr_tried = 0;
@@ -2538,7 +2687,10 @@ void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
 	unsigned long gtid = (unsigned long)omp_get_thread_num();
 	unsigned int use_own_tasks = 1, new_victim = 0;
 	unsigned long last_qid = (thr->num_queues <= gtid) ? 1 : gtid;
-
+	#ifdef XTASK_RANDOM_BWS
+	unsigned long last_req_qid = last_qid;
+	int wait_countdown = 0;
+	#endif
 	if(gomp_barrier_last_thread(state)){
 			xflag_gathered(&thr->xflag, thr->ts.team_id == 0, state);
 		}
@@ -2570,6 +2722,10 @@ while(1){
 			xtask_handle_req(&last_qid);
 			#endif // XTASK_SWS
 
+			#ifdef XTASK_RANDOM_BWS
+			handle_reqs(&last_req_qid);
+			#endif // XTASK_RANDOM_BWS
+
 			#ifdef GOMP_USE_XPERFLOG
 			xperflog_record(XPERF_STALL_END | XPERF_BAR, bar_fref, bar_fref);
 			#endif // GOMP_USE_XPERFLOG
@@ -2583,14 +2739,25 @@ while(1){
 			steal_req();
 			#endif
 
-			#ifdef GOMP_USE_XPERFLOG
-			xperflog_record(XPERF_BAR_END| XPERF_STALL, bar_fref, bar_fref);
-			#endif // GOMP_USE_XPERFLOG
-
 			#ifdef XTASK_SWS
 			xtask_steal_req();
 			#endif
 
+			#ifdef XTASK_RANDOM_BWS
+			if(wait_countdown > 0){
+				wait_countdown--;
+			}else{
+				wait_countdown = MAX_WAIT_COUNTDOWN;
+				send_reqs();
+			}
+			#endif
+
+
+			#ifdef GOMP_USE_XPERFLOG
+			xperflog_record(XPERF_BAR_END| XPERF_STALL, bar_fref, bar_fref);
+			#endif // GOMP_USE_XPERFLOG
+
+		
 
 			break;
 		}
@@ -2863,6 +3030,10 @@ GOMP_taskwait (void)
 	unsigned long gtid = (unsigned long)omp_get_thread_num();
 	unsigned int use_own_tasks = 1, new_victim = 0;
 	unsigned long last_qid = (thr->num_queues <= gtid) ? 1 : gtid;
+	#ifdef XTASK_RANDOM_BWS
+	unsigned long last_req_qid = last_qid;
+	int wait_countdown = 0;
+	#endif
 	gomp_task_t *next_task;
 	if(__builtin_expect(thr->use_xq, 1)){
 		// has to reimplement our own version of taskwait;
@@ -2896,6 +3067,16 @@ GOMP_taskwait (void)
 				#ifdef XTASK_SWS
 				xtask_steal_req();
 				#endif
+
+				#ifdef XTASK_RANDOM_BWS
+				if(wait_countdown > 0){
+					wait_countdown--;
+				}else{
+					wait_countdown = MAX_WAIT_COUNTDOWN;
+					send_reqs();
+				}
+				#endif
+
 				continue;
 			}else{
 
@@ -2905,6 +3086,10 @@ GOMP_taskwait (void)
 
 				#ifdef XTASK_SWS
 				xtask_handle_req(&last_qid);
+				#endif
+
+				#ifdef XTASK_RANDOM_BWS
+				handle_reqs(&last_req_qid);
 				#endif
 			}
 			
