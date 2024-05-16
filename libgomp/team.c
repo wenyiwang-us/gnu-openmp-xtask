@@ -376,7 +376,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	xtask_debug(0, 0, "XTASK_SimpleWS enabled.\n");
 #endif
 #ifdef XTASK_RANDOM_BWS
-	xtask_debug(0, 0, "XTASK_RandomBWS enabled.\n");
+	xtask_debug(0, 0, "XTASK_RandomBWS: N_VICTIMS=%d, N_REQ_CHECKS=%d, STEAL_DIVIDER=%d, MAX_WAIT_COUNTDOWN=%d\n", N_VICTIMS, N_REQ_CHECKS, STEAL_DIVIDER, MAX_WAIT_COUNTDOWN);
 #endif
 #endif // GOMP_USE_XQUEUE
 
