@@ -1103,8 +1103,6 @@ struct gomp_thread
 #endif // XTASK_RANDOM_WS
 
 #ifdef XTASK_RANDOM_BWS
-  int nvictims;
-  int nreq_checks;
   unsigned long last_req_q_accessed;
   unsigned long last_req_q;
 #endif // XTASK_RANDOM_BWS

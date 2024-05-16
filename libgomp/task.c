@@ -597,10 +597,9 @@ static inline int steal_req(){
 static inline void send_reqs(){
 	struct gomp_thread *thr = gomp_thread();
 	int nthreads = thr->ts.team->nthreads;
-	int nvictims = thr->nvictims;
 	unsigned vtid, vqid;
-	for(int i = 0; i < nvictims; i++){
-		while((vtid = myrand() % nthreads)!= thr->ts.team_id);
+	for(int i = 0; i < N_VICTIMS; i++){
+		vtid = myrand() % nthreads;
 		vqid = myrand() % nthreads;
 		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
 		// send req to vtid
@@ -620,7 +619,6 @@ static inline void handle_reqs(unsigned long *last_req_q){
 	int nreqc = 1;
 	int num_tries;
 	bool full;
-	int nreq_checks = thr->nreq_checks;
 
 
 	if(thr->last_req_q_accessed > 0){
@@ -637,7 +635,7 @@ static inline void handle_reqs(unsigned long *last_req_q){
 			// );
 			// push tasks to thief
 			// if in - out > 2, then we can push half
-			unsigned ttid = WS_REQ2TID(req);
+						unsigned ttid = WS_REQ2TID(req);
 			struct gomp_thread *tthr = thr->thread_pool->threads[ttid]; //thief thread
 			unsigned qid_of_thief = ttid < tid ? thr->num_queues + ttid - tid : ttid - tid;
 			struct gomp_taskq *thief_task_q = tthr->td_task_q[qid_of_thief];
@@ -676,7 +674,7 @@ static inline void handle_reqs(unsigned long *last_req_q){
 
 	// either the last_req_accessed is 0 or the round is not matched
 	unsigned long qid = *last_req_q;
-	for( ;nreqc < nreq_checks && qid > 0; qid--, nreqc++){
+	for( ;nreqc < N_REQ_CHECKS && qid > 0; qid--, nreqc++){
 		task_q = thr->td_task_q[qid];
 		req = task_q->req;
 		if(WS_REQ2ROUND(req) == task_q->round){
@@ -747,12 +745,6 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	
 	thr->last_q = 0;
 	thr->last_q_accessed = 0;
-	
-	#ifdef XTASK_RANDOM_BWS
-	thr->last_req_q_accessed = 0;
-	thr->nvictims = N_VICTIMS < thr->num_queues - 1 ? N_VICTIMS : thr->num_queues - 1;
-	thr->nreq_checks = N_REQ_CHECKS < thr->num_queues - 1 ? N_REQ_CHECKS : thr->num_queues - 1;
-	#endif
 	
 	// thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * thr->num_queues);
 	thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * (thr->num_queues)); // with xws
