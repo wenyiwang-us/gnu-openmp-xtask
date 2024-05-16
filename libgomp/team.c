@@ -62,6 +62,12 @@ struct gomp_thread_start_data
   pthread_t handle;
 #ifdef GOMP_USE_XQUEUE
   bool use_xq;
+#ifdef XTASK_RANDOM_BWS
+  int nvictims;
+  int nreq_checks;
+  int steal_divider;
+  int max_wait_countdown;
+#endif
 #endif
 };
 
@@ -109,6 +115,15 @@ gomp_thread_start (void *xdata)
 
 #ifdef GOMP_USE_XQUEUE
 	thr->use_xq = data->use_xq;
+#ifdef XTASK_RANDOM_BWS
+	if(thr->use_xq){
+		thr->nvictims = data->nvictims;
+		thr->nreq_checks = data->nreq_checks;
+		thr->steal_divider = data->steal_divider;
+		thr->max_wait_countdown = data->max_wait_countdown;
+	}
+	// xtask_debug(0, 0, "XTASK v.1.4, use_xq=%d, nvictims=%d, nreq_checks=%d, steal_divider=%d, max_wait_countdown=%d", thr->use_xq, thr->nvictims, thr->nreq_checks, thr->steal_divider, thr->max_wait_countdown);
+#endif
 	if(thr->use_xq && thr->td_task_q == NULL)
 	  	gomp_alloc_task_q(thr);
 #ifdef GOMP_USE_XPERFLOG
@@ -364,9 +379,16 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	// team->use_xq = true; // default to true
 	// thr->use_xq = flags & 32;
 	thr->use_xq = 1;
+	gomp_num_task_queues = nthreads;
+
 	xtask_debug(0, 0, "XTASK v.1.4, nthreads=%d, use_xq=%d, nested=%d, level=%d.", nthreads, thr->use_xq, nested, thr->ts.level);
-  	gomp_num_task_queues = nthreads;
+#ifdef XTASK_RANDOM_BWS
+if(thr->use_xq){
+	ws_get_env_vars();
+	xtask_debug(0, 0, "XTASK_RandomBWS: N_VICTIMS=%d, N_REQ_CHECKS=%d, STEAL_DIVIDER=%d, MAX_WAIT_COUNTDOWN=%d\n", thr->nvictims, thr->nreq_checks, thr->steal_divider, thr->max_wait_countdown);
   	gomp_alloc_task_q(thr);
+}
+#endif // XTASK_RANDOM_BWS
 #ifdef GOMP_USE_XPERFLOG
 	xtask_debug(0, 0, "XPERFLOG v1 enabled.\n");
 	GOMP_ATOMIC_ST_REL(&team->xperflog_awaited, nthreads);
@@ -374,10 +396,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 #endif // GOMP_USE_XPERFLOG
 #ifdef XTASK_SWS
 	xtask_debug(0, 0, "XTASK_SimpleWS enabled.\n");
-#endif
-#ifdef XTASK_RANDOM_BWS
-	xtask_debug(0, 0, "XTASK_RandomBWS: N_VICTIMS=%d, N_REQ_CHECKS=%d, STEAL_DIVIDER=%d, MAX_WAIT_COUNTDOWN=%d\n", N_VICTIMS, N_REQ_CHECKS, STEAL_DIVIDER, MAX_WAIT_COUNTDOWN);
-#endif
+#endif // XTASK_SWS
 #endif // GOMP_USE_XQUEUE
 
   if (__builtin_expect (gomp_places_list != NULL, 0) && thr->place == 0)
@@ -807,6 +826,12 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
       start_data->ts.place_partition_off = thr->ts.place_partition_off;
       start_data->ts.place_partition_len = thr->ts.place_partition_len;
       start_data->place = 0;
+#if defined(GOMP_USE_XQUEUE) && defined(XTASK_RANDOM_BWS)
+	  start_data->nvictims = thr->nvictims;
+	  start_data->nreq_checks = thr->nreq_checks;
+	  start_data->steal_divider = thr->steal_divider;
+	  start_data->max_wait_countdown = thr->max_wait_countdown;
+#endif
       if (__builtin_expect (gomp_places_list != NULL, 0))
 	{
 	  switch (bind)

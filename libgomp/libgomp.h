@@ -1105,6 +1105,8 @@ struct gomp_thread
 #ifdef XTASK_RANDOM_BWS
   int nvictims;
   int nreq_checks;
+  int steal_divider;
+  int max_wait_countdown;
   unsigned long last_req_q_accessed;
   unsigned long last_req_q;
 #endif // XTASK_RANDOM_BWS
@@ -1357,6 +1359,9 @@ extern void xflag_init(struct gomp_thread *thr);
 extern void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs);
 // extern void xflag_build_tree(struct xflag *, int, int);
 // extern void xflag_optimize_tree(struct xflag *);
+#ifdef XTASK_RANDOM_BWS
+extern void ws_get_env_vars();
+#endif
 
 #ifdef GOMP_USE_XPERFLOG
 #include <x86intrin.h>

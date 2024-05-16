@@ -593,6 +593,48 @@ static inline int steal_req(){
 #endif // XTASK_RANDOM_WS
 
 #ifdef XTASK_RANDOM_BWS
+#include <stdio.h>
+void ws_get_env_vars(){
+	struct gomp_thread *thr = gomp_thread();
+	
+	char *env;
+	env = getenv("N_VICTIMS");
+	if(env == NULL){
+		thr->nvictims = N_VICTIMS;
+		xtask_debug(0, 0, "WARNING: N_VICTIMS is not set, using default value %d", N_VICTIMS);
+	}else{
+		thr->nvictims = atoi(env);
+		// xtask_debug(0, 0, "N_VICTIMS=%d", thr->nvictims);
+	}
+
+	env = getenv("N_REQ_CHECKS");
+	if(env == NULL){
+		thr->nreq_checks = N_REQ_CHECKS;
+		xtask_debug(0, 0, "WARNING: N_REQ_CHECKS is not set, using default value %d", N_REQ_CHECKS);
+	}else{
+		thr->nreq_checks = atoi(env);
+		// xtask_debug(0, 0, "N_REQ_CHECKS=%d", thr->nreq_checks);
+	}
+
+	env = getenv("STEAL_DIVIDER");
+	if(env == NULL){
+		thr->steal_divider = STEAL_DIVIDER;
+		xtask_debug(0, 0, "WARNING: STEAL_DIVIDER is not set, using default value %d", STEAL_DIVIDER);
+	}else{
+		thr->steal_divider = atoi(env);
+		// xtask_debug(0, 0, "STEAL_DIVIDER=%d", thr->steal_divider);
+	}
+
+	env = getenv("MAX_WAIT_COUNTDOWN");
+	if(env == NULL){
+		thr->max_wait_countdown = MAX_WAIT_COUNTDOWN;
+		xtask_debug(0, 0, "WARNING: MAX_WAIT_COUNTDOWN is not set, using default value %d", MAX_WAIT_COUNTDOWN);
+	}else{
+		thr->max_wait_countdown = atoi(env);
+		// xtask_debug(0, 0, "MAX_WAIT_COUNTDOWN=%d", thr->max_wait_countdown);
+	}
+
+}
 
 static inline void send_reqs(){
 	struct gomp_thread *thr = gomp_thread();
@@ -600,7 +642,7 @@ static inline void send_reqs(){
 	int nvictims = thr->nvictims;
 	unsigned vtid, vqid;
 	for(int i = 0; i < nvictims; i++){
-		while((vtid = myrand() % nthreads)!= thr->ts.team_id);
+		while((vtid = myrand() % nthreads)== thr->ts.team_id);
 		vqid = myrand() % nthreads;
 		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
 		// send req to vtid
@@ -621,6 +663,7 @@ static inline void handle_reqs(unsigned long *last_req_q){
 	int num_tries;
 	bool full;
 	int nreq_checks = thr->nreq_checks;
+	int steal_divider = thr->steal_divider;
 
 
 	if(thr->last_req_q_accessed > 0){
@@ -657,6 +700,8 @@ static inline void handle_reqs(unsigned long *last_req_q){
 					if(full)
 						break;
 					gomp_task_t *task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
+					if(task == NULL)
+						break;
 					task_q->td_deque[task_q->td_deque_tail] = NULL;
 					task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
 					task_q->nout++;
@@ -695,7 +740,7 @@ static inline void handle_reqs(unsigned long *last_req_q){
 			unsigned qid_of_thief = ttid < tid ? thr->num_queues + ttid - tid : ttid - tid;
 			struct gomp_taskq *thief_task_q = tthr->td_task_q[qid_of_thief];
 
-			long long ntasks = (task_q->nin - task_q->nout) / STEAL_DIVIDER;
+			long long ntasks = (task_q->nin - task_q->nout) / steal_divider;
 			if(ntasks > 1){
 				for(int i = 0; i < ntasks; i++){
 					num_tries = 0;
@@ -711,6 +756,8 @@ static inline void handle_reqs(unsigned long *last_req_q){
 					if(full)
 						break;
 					gomp_task_t *task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
+					if(task == NULL)
+						break;
 					task_q->td_deque[task_q->td_deque_tail] = NULL;
 					task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
 					task_q->nout++;
@@ -750,8 +797,22 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	
 	#ifdef XTASK_RANDOM_BWS
 	thr->last_req_q_accessed = 0;
-	thr->nvictims = N_VICTIMS < thr->num_queues - 1 ? N_VICTIMS : thr->num_queues - 1;
-	thr->nreq_checks = N_REQ_CHECKS < thr->num_queues - 1 ? N_REQ_CHECKS : thr->num_queues - 1;
+	if(thr->nvictims <= 0 ){
+		thr->nvictims = N_VICTIMS;
+		xtask_debug(0, 0, "WARNING: nvictims is not set, using default value %d", N_VICTIMS);
+	}
+	if(thr->nreq_checks <=0 ){
+		thr->nreq_checks = N_REQ_CHECKS;
+		xtask_debug(0, 0, "WARNING: nreq_checks is not set, using default value %d", N_REQ_CHECKS);
+	}
+	if(thr->steal_divider <= 0){
+		thr->steal_divider = STEAL_DIVIDER;
+		xtask_debug(0, 0, "WARNING: steal_divider is not set, using default value %d", STEAL_DIVIDER);
+	}
+	if(thr->max_wait_countdown <= 0){
+		thr->max_wait_countdown = MAX_WAIT_COUNTDOWN;
+		xtask_debug(0, 0, "WARNING: max_wait_countdown is not set, using default value %d", MAX_WAIT_COUNTDOWN);
+	}
 	#endif
 	
 	// thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * thr->num_queues);
@@ -2698,6 +2759,7 @@ void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
 	#ifdef XTASK_RANDOM_BWS
 	unsigned long last_req_qid = last_qid;
 	int wait_countdown = 0;
+	int max_wait_countdown = thr->max_wait_countdown;
 	#endif
 	if(gomp_barrier_last_thread(state)){
 			xflag_gathered(&thr->xflag, thr->ts.team_id == 0, state);
@@ -2755,7 +2817,7 @@ while(1){
 			if(wait_countdown > 0){
 				wait_countdown--;
 			}else{
-				wait_countdown = MAX_WAIT_COUNTDOWN;
+				wait_countdown = max_wait_countdown;
 				send_reqs();
 			}
 			#endif
@@ -3041,6 +3103,7 @@ GOMP_taskwait (void)
 	#ifdef XTASK_RANDOM_BWS
 	unsigned long last_req_qid = last_qid;
 	int wait_countdown = 0;
+	int max_wait_countdown = thr->max_wait_countdown;
 	#endif
 	gomp_task_t *next_task;
 	if(__builtin_expect(thr->use_xq, 1)){
@@ -3080,7 +3143,7 @@ GOMP_taskwait (void)
 				if(wait_countdown > 0){
 					wait_countdown--;
 				}else{
-					wait_countdown = MAX_WAIT_COUNTDOWN;
+					wait_countdown = max_wait_countdown;
 					send_reqs();
 				}
 				#endif
