@@ -386,9 +386,11 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 if(thr->use_xq){
 	ws_get_env_vars();
 	xtask_debug(0, 0, "XTASK_RandomBWS: N_VICTIMS=%d, N_REQ_CHECKS=%d, STEAL_DIVIDER=%d, MAX_WAIT_COUNTDOWN=%d\n", thr->nvictims, thr->nreq_checks, thr->steal_divider, thr->max_wait_countdown);
-  	gomp_alloc_task_q(thr);
 }
 #endif // XTASK_RANDOM_BWS
+if(thr->use_xq && thr->td_task_q == NULL)
+	gomp_alloc_task_q(thr);
+
 #ifdef GOMP_USE_XPERFLOG
 	xtask_debug(0, 0, "XPERFLOG v1 enabled.\n");
 	GOMP_ATOMIC_ST_REL(&team->xperflog_awaited, nthreads);
