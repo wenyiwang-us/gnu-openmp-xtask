@@ -1040,6 +1040,10 @@ typedef struct xperflog_cell {
 } xperflog_cell_t
 __attribute__((aligned(64)));
 
+typedef struct xstats_data {
+  unsigned long long ntasks_stolen;
+} xstats_data_t;
+
 typedef struct xperflog {
   unsigned long long frefc[XPERF_N_EVENTS]; // frame refernce counters
   unsigned long long eidx; // index of the log
@@ -1054,6 +1058,7 @@ typedef struct xperflog {
   int generation;
   bool is_stalling; // is stalling
   // should flush then reinit after each team barrier
+  xstats_data_t stats;
 } xperflog_t
 __attribute__((aligned(64)))
 ;
