@@ -77,10 +77,21 @@ static int gomp_push_task(struct gomp_task *);
 static gomp_task_t* gomp_remove_my_task();
 static gomp_task_t* gomp_remove_aux_task(unsigned long *);
 
-#ifdef GOMP_USE_XPERFLOG
-// delcare the functions
-static inline void xperflog_task_stolen(unsigned long long);
-#endif // GOMP_USE_XPERFLOG
+#ifdef XTASK_ENABLE_STATS
+static inline void xstats_ntasks_stolen(unsigned long long ntasks){
+	struct gomp_thread *thr = gomp_thread();
+	thr->xstats.ntasks_stolen += ntasks;
+}
+static inline void xstats_nreqs_sent(unsigned long long nreqs){
+	struct gomp_thread *thr = gomp_thread();
+	thr->xstats.nreqs_sent += nreqs;
+}
+static inline void xstats_nreqs_handled(unsigned long long nreqs){
+	struct gomp_thread *thr = gomp_thread();
+	thr->xstats.nreqs_handled += nreqs;
+}
+
+#endif
 
 
 #ifdef XTASK_SWS // simple workstealing
@@ -657,6 +668,9 @@ static inline void send_reqs(){
 			vthr->last_req_q_accessed = vqid;
 		}
 	}
+	#ifdef XTASK_ENABLE_STATS
+	xstats_nreqs_sent(nvictims);
+	#endif
 }
 
 static inline void handle_reqs(unsigned long *last_req_q){
@@ -664,7 +678,7 @@ static inline void handle_reqs(unsigned long *last_req_q){
 	unsigned tid = thr->ts.team_id;
 	uint64_t req = 0;
 	struct gomp_taskq *task_q = NULL;
-	int nreqc = 1;
+	unsigned long long nreqc = 1;
 	int num_tries;
 	#ifdef GOMP_USE_XPERFLOG
 	unsigned long long ntasks_stolen = 0;
@@ -714,7 +728,7 @@ static inline void handle_reqs(unsigned long *last_req_q){
 					task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
 					task_q->nout++;
 					// push to thief's q
-					#ifdef GOMP_USE_XPERFLOG
+					#ifdef XTASK_ENABLE_STATS
 					ntasks_stolen++;
 					#endif
 
@@ -724,7 +738,8 @@ static inline void handle_reqs(unsigned long *last_req_q){
 				}
 				
 				tthr->last_q_accessed = qid_of_thief;
-			}	
+			
+			}
 			task_q->round++;
 		}
 	}
@@ -772,7 +787,7 @@ static inline void handle_reqs(unsigned long *last_req_q){
 					task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
 					task_q->nout++;
 					// push to thief's q
-					#ifdef GOMP_USE_XPERFLOG
+					#ifdef XTASK_ENABLE_STATS
 					ntasks_stolen++;
 					#endif
 	
@@ -789,8 +804,9 @@ static inline void handle_reqs(unsigned long *last_req_q){
 
 	}
 
-	#ifdef GOMP_USE_XPERFLOG
-	xperflog_task_stolen(ntasks_stolen);
+	#ifdef XTASK_ENABLE_STATS
+	xstats_ntasks_stolen(ntasks_stolen);
+	xstats_nreqs_handled(nreqc);
 	#endif
 
 	if(qid > 0)
@@ -809,6 +825,11 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	
 	thr->last_q = 0;
 	thr->last_q_accessed = 0;
+	#ifdef XTASK_ENABLE_STATS
+	thr->xstats.ntasks_stolen = 0;
+	thr->xstats.nreqs_handled = 0;
+	thr->xstats.nreqs_sent = 0;
+	#endif
 	
 	#ifdef XTASK_RANDOM_BWS
 	thr->last_req_q_accessed = 0;
@@ -1179,11 +1200,6 @@ static inline unsigned long long xperflog_get_fref(xperf_type_t event){
 	return perflog->frefc[event];
 }
 
-static inline void xperflog_task_stolen(unsigned long long ntasks_stolen){
-	struct gomp_thread *thr = gomp_thread();
-	struct xperflog *perflog = &thr->xperflog;
-	perflog->stats.ntasks_stolen+=ntasks_stolen;
-}
 
 void xperflog_init(){
 	struct gomp_thread *thr = gomp_thread();
@@ -1201,7 +1217,6 @@ void xperflog_init(){
 	perflog->eidx = 0;
 	perflog->last_q = 0;
 	perflog->is_stalling = false;
-	perflog->stats.ntasks_stolen = 0;
 
 	
 	// init frame reference counters array
@@ -1356,14 +1371,20 @@ void xomp_perflog_dump(void){
 	#ifdef GOMP_USE_XPERFLOG
 	xperflog_dump(thr);
 	// show some of the stats
+	#ifdef XTASK_ENABLE_STATS
 	unsigned long long ntasks_stolen = 0;
+	unsigned long long nreqs_handled = 0;
+	unsigned long long nreqs_sent = 0;
 	if(thr->ts.team_id == 0){
 		for(int i = 0; i < thr->ts.team->nthreads; i++){
 			struct gomp_thread *tthr = thr->thread_pool->threads[i];
-			ntasks_stolen += tthr->xperflog.stats.ntasks_stolen;
+			ntasks_stolen += tthr->xstats.ntasks_stolen;
+			nreqs_handled += tthr->xstats.nreqs_handled;
+			nreqs_sent += tthr->xstats.nreqs_sent;
 		}
-		xtask_debug(0, 0, "XSTATS: ntasks_stolen=%llu", ntasks_stolen); 
+		xtask_debug(0, 0, "XSTATS: ntasks_stolen=%llu, nreqs_handled=%llu, nreqs_sent=%llu", ntasks_stolen, nreqs_handled, nreqs_sent); 
 	}
+	#endif
 	#else
 	if(thr->ts.team_id == 0)
 		xtask_debug(0, 0, "xperflog - dump: perflog is not enabled.");

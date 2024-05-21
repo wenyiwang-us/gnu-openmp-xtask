@@ -79,6 +79,7 @@
 // #define XTASK_SWS 1 // simple ws
 // #define XTASK_RANDOM_WS 1
 #define XTASK_RANDOM_BWS 1 // random batch workstealing
+#define XTASK_ENABLE_STATS 1
 
 // #define XTASK_WORKSHARE 1
 
@@ -998,6 +999,16 @@ typedef struct xws {
 
 #endif // XTASK_LLWS
 
+
+#ifdef XTASK_ENABLE_STATS 
+typedef struct xstats_data {
+  unsigned long long nreqs_handled;
+  unsigned long long nreqs_sent;
+  unsigned long long ntasks_stolen;
+} xstats_data_t;
+
+#endif // XTASK_ENABLE_STATS
+
 #ifdef GOMP_USE_XPERFLOG
 #define XPERFLOG_MAX_EVENTS 1<<27 // 128MB events
 // lets use bit 10 to indicate if the event is a sample event
@@ -1040,9 +1051,6 @@ typedef struct xperflog_cell {
 } xperflog_cell_t
 __attribute__((aligned(64)));
 
-typedef struct xstats_data {
-  unsigned long long ntasks_stolen;
-} xstats_data_t;
 
 typedef struct xperflog {
   unsigned long long frefc[XPERF_N_EVENTS]; // frame refernce counters
@@ -1058,7 +1066,6 @@ typedef struct xperflog {
   int generation;
   bool is_stalling; // is stalling
   // should flush then reinit after each team barrier
-  xstats_data_t stats;
 } xperflog_t
 __attribute__((aligned(64)))
 ;
@@ -1120,6 +1127,10 @@ struct gomp_thread
 #ifdef GOMP_USE_XPERFLOG
   struct xperflog xperflog;
 #endif // GOMP_USE_XPERFLOG
+
+#ifdef XTASK_ENABLE_STATS
+  xstats_data_t xstats;
+#endif // XTASK_ENABLE_STATS
 #endif // GOMP_USE_XQUEUE
   /* This semaphore is used for ordered loops.  */
   gomp_sem_t release;
