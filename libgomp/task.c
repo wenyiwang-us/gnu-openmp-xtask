@@ -680,7 +680,7 @@ static inline void handle_reqs(unsigned long *last_req_q){
 	struct gomp_taskq *task_q = NULL;
 	unsigned long long nreqc = 1;
 	int num_tries;
-	#ifdef GOMP_USE_XPERFLOG
+	#ifdef XTASK_ENABLE_STATS
 	unsigned long long ntasks_stolen = 0;
 	#endif
 	bool full;

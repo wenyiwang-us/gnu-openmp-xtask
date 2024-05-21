@@ -74,7 +74,7 @@
 #endif
 #define GOMP_USE_XQUEUE 1
 // #define GOMP_USE_XWS 1 // use xworkshares/workstealing
-#define GOMP_USE_XPERFLOG 1
+// #define GOMP_USE_XPERFLOG 1
 // #define XTASK_LLWS 1
 // #define XTASK_SWS 1 // simple ws
 // #define XTASK_RANDOM_WS 1
