@@ -1370,6 +1370,7 @@ void xomp_perflog_dump(void){
 	struct gomp_thread *thr = gomp_thread();
 	#ifdef GOMP_USE_XPERFLOG
 	xperflog_dump(thr);
+	#endif
 	// show some of the stats
 	#ifdef XTASK_ENABLE_STATS
 	unsigned long long ntasks_stolen = 0;
@@ -1385,7 +1386,7 @@ void xomp_perflog_dump(void){
 		xtask_debug(0, 0, "XSTATS: ntasks_stolen=%llu, nreqs_handled=%llu, nreqs_sent=%llu", ntasks_stolen, nreqs_handled, nreqs_sent); 
 	}
 	#endif
-	#else
+	#ifndef GOMP_USE_XPERFLOG
 	if(thr->ts.team_id == 0)
 		xtask_debug(0, 0, "xperflog - dump: perflog is not enabled.");
 	#endif // GOMP_USE_XPERFLOG
