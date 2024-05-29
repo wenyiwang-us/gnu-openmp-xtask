@@ -78,19 +78,48 @@ static gomp_task_t* gomp_remove_my_task();
 static gomp_task_t* gomp_remove_aux_task(unsigned long *);
 
 #ifdef XTASK_ENABLE_STATS
-static inline void xstats_ntasks_stolen(unsigned long long ntasks){
+#include <stdio.h>
+void xstats_init(){
 	struct gomp_thread *thr = gomp_thread();
-	thr->xstats.ntasks_stolen += ntasks;
-}
-static inline void xstats_nreqs_sent(unsigned long long nreqs){
-	struct gomp_thread *thr = gomp_thread();
-	thr->xstats.nreqs_sent += nreqs;
-}
-static inline void xstats_nreqs_handled(unsigned long long nreqs){
-	struct gomp_thread *thr = gomp_thread();
-	thr->xstats.nreqs_handled += nreqs;
+	xstats_data_t *xd = &thr->xstats;
+	xd->edix = 0;
+	xd->sd = (xstats_data_cell_t *)gomp_malloc(sizeof(xstats_data_cell_t) * XSTATS_MAX_EVENTS);
+	char *fpath = getenv("XSTATS_PATH");
+	snprintf(xd->fname, 128, "%s/xstats_%d.csv", fpath, thr->ts.team_id);
 }
 
+void xstats_record(xstats_type_t event, unsigned long long v0, unsigned long long v1, unsigned long long v2){
+	struct gomp_thread *thr = gomp_thread();
+	if(thr->xstats.edix >= XSTATS_MAX_EVENTS){
+		xtask_debug(0, 1, "xstats buffer is full.");
+		return;
+	}
+	xstats_data_cell_t *sd = &thr->xstats.sd[thr->xstats.edix];
+	unsigned int aux;
+
+	sd->ts = __rdtscp(&aux);	
+	sd->event = event;
+	// different event has different meaning of v0, v1, v2
+	sd->v0 = v0; // 
+	sd->v1 = v1; // 
+	sd->v2 = v2; // 
+	thr->xstats.edix++;
+}
+
+void xstats_dump(struct gomp_thread *thr){
+	xstats_data_t *xd = &thr->xstats;
+	xstats_data_cell_t *sd = xd->sd;
+	FILE *fp = fopen(xd->fname, "w");
+	if(fp == NULL){
+		xtask_debug(0, 1, "failed to open file %s", xd->fname);
+		return;
+	}
+	fprintf(fp, "timestamp,event,v0,v1,v2");
+	for(unsigned long long i = 0; i < xd->edix; i++){
+		fprintf(fp, "\n%llu,%d,%llu,%llu,%llu", sd[i].ts, sd[i].event, sd[i].v0, sd[i].v1, sd[i].v2);
+	}
+	fclose(fp);
+}
 #endif
 
 
@@ -657,6 +686,12 @@ static inline void send_reqs(){
 	int nthreads = thr->ts.team->nthreads;
 	int nvictims = thr->nvictims;
 	unsigned vtid, vqid;
+
+	#ifdef XTASK_ENABLE_STATS
+	unsigned long long stats_nreqs_sent = 0;
+	unsigned long long stats_nreqs = (unsigned long long) nvictims;
+	#endif // XTASK_ENABLE_STATS
+
 	for(int i = 0; i < nvictims; i++){
 		while((vtid = myrand() % nthreads)== thr->ts.team_id);
 		vqid = myrand() % nthreads;
@@ -666,10 +701,14 @@ static inline void send_reqs(){
 		if(WS_REQ2ROUND(vthr->td_task_q[vqid]->req) < round){
 			vthr->td_task_q[vqid]->req = WS_TID2REQ(thr->ts.team_id) | round;
 			vthr->last_req_q_accessed = vqid;
+
+			#ifdef XTASK_ENABLE_STATS
+			stats_nreqs_sent++;
+			#endif // XTASK_ENABLE_STATS
 		}
 	}
 	#ifdef XTASK_ENABLE_STATS
-	xstats_nreqs_sent(nvictims);
+	xstats_record(XSTATS_REQ_SENT, stats_nreqs, stats_nreqs_sent, 0);
 	#endif
 }
 
@@ -680,18 +719,22 @@ static inline void handle_reqs(unsigned long *last_req_q){
 	struct gomp_taskq *task_q = NULL;
 	unsigned long long nreqc = 1;
 	int num_tries;
-	#ifdef XTASK_ENABLE_STATS
-	unsigned long long ntasks_stolen = 0;
-	#endif
 	bool full;
 	int nreq_checks = thr->nreq_checks;
 	int steal_divider = thr->steal_divider;
 
+	#ifdef XTASK_ENABLE_STATS
+	unsigned long long xstats_ntasks_stolen = 0;
+	unsigned long long xstats_nreq_handled = 0;
+	#endif
 
 	if(thr->last_req_q_accessed > 0){
 		task_q = thr->td_task_q[thr->last_req_q_accessed];
 		req = task_q->req;
 		if(WS_REQ2ROUND(req) == task_q->round){
+			#ifdef XTASK_ENABLE_STATS
+			xstats_nreq_handled++;
+			#endif
 			// xtask_debug(0, 1, "handle_req from T#%d, qid=%lu, round=%lu, req=%lu, nin=%lld, nout=%lld,",
 			// WS_REQ2TID(req), 
 			// thr->last_req_q_accessed, 
@@ -729,7 +772,7 @@ static inline void handle_reqs(unsigned long *last_req_q){
 					task_q->nout++;
 					// push to thief's q
 					#ifdef XTASK_ENABLE_STATS
-					ntasks_stolen++;
+					xstats_ntasks_stolen++;
 					#endif
 
 					thief_task_q->nin++;
@@ -750,6 +793,9 @@ static inline void handle_reqs(unsigned long *last_req_q){
 		task_q = thr->td_task_q[qid];
 		req = task_q->req;
 		if(WS_REQ2ROUND(req) == task_q->round){
+			#ifdef XTASK_ENABLE_STATS
+			xstats_nreq_handled++;
+			#endif
 			// xtask_debug(0, 1, "handle_req from T#%d, qid=%lu, round=%lu, req=%lu, nin=%lld, nout=%lld,",
 			// WS_REQ2TID(req), 
 			// qid, 
@@ -788,7 +834,7 @@ static inline void handle_reqs(unsigned long *last_req_q){
 					task_q->nout++;
 					// push to thief's q
 					#ifdef XTASK_ENABLE_STATS
-					ntasks_stolen++;
+					xstats_ntasks_stolen++;
 					#endif
 	
 					thief_task_q->nin++;
@@ -798,15 +844,14 @@ static inline void handle_reqs(unsigned long *last_req_q){
 				
 				tthr->last_q_accessed = qid_of_thief;
 			}
-
+			
 			task_q->round++;
 		}
 
 	}
 
 	#ifdef XTASK_ENABLE_STATS
-	xstats_ntasks_stolen(ntasks_stolen);
-	xstats_nreqs_handled(nreqc);
+	xstats_record(XSTATS_REQ_HANDLED, (unsigned long long) nreq_checks, xstats_nreq_handled, xstats_ntasks_stolen);
 	#endif
 
 	if(qid > 0)
@@ -826,9 +871,7 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	thr->last_q = 0;
 	thr->last_q_accessed = 0;
 	#ifdef XTASK_ENABLE_STATS
-	thr->xstats.ntasks_stolen = 0;
-	thr->xstats.nreqs_handled = 0;
-	thr->xstats.nreqs_sent = 0;
+	xstats_init(); // our stats is only useful after we use the q
 	#endif
 	
 	#ifdef XTASK_RANDOM_BWS
@@ -1263,7 +1306,6 @@ void xperflog_record(xperf_type_t event, unsigned long long hfref, unsigned long
 	perflog->log[perflog->eidx].hfref = hfref;
 	perflog->log[perflog->eidx].lfref = lfref;
 	// record sample task count
-	// unsigned long long sample = 0;
 	if(event > XPERF_THREAD){
 		// for(int i = 0; i < 4; i++){
 			// perflog->last_q = perflog->last_q + i < thr->num_queues ? perflog->last_q + i : (perflog->last_q + i) % thr->num_queues;
@@ -1356,7 +1398,6 @@ void xperflog_dump_reset(){
 	struct gomp_thread *thr = gomp_thread();
 	xperflog_dump(thr);
 	xperflog_reset(thr);
-	// xperflog_done(thr);
 }
 #endif // GOMP_USE_XPERFLOG
 
@@ -1373,18 +1414,7 @@ void xomp_perflog_dump(void){
 	#endif
 	// show some of the stats
 	#ifdef XTASK_ENABLE_STATS
-	unsigned long long ntasks_stolen = 0;
-	unsigned long long nreqs_handled = 0;
-	unsigned long long nreqs_sent = 0;
-	if(thr->ts.team_id == 0){
-		for(int i = 0; i < thr->ts.team->nthreads; i++){
-			struct gomp_thread *tthr = thr->thread_pool->threads[i];
-			ntasks_stolen += tthr->xstats.ntasks_stolen;
-			nreqs_handled += tthr->xstats.nreqs_handled;
-			nreqs_sent += tthr->xstats.nreqs_sent;
-		}
-		xtask_debug(0, 0, "XSTATS: ntasks_stolen=%llu, nreqs_handled=%llu, nreqs_sent=%llu", ntasks_stolen, nreqs_handled, nreqs_sent); 
-	}
+	xstats_dump(thr);
 	#endif
 	#ifndef GOMP_USE_XPERFLOG
 	if(thr->ts.team_id == 0)

@@ -396,6 +396,10 @@ if(thr->use_xq && thr->td_task_q == NULL)
 	GOMP_ATOMIC_ST_REL(&team->xperflog_awaited, nthreads);
 	xperflog_init();
 #endif // GOMP_USE_XPERFLOG
+#ifdef XTASK_ENABLE_STATS
+	xtask_debug(0, 0, "XTASK_STATS enabled.\n");
+#endif // XTASK_ENABLE_STATS
+
 #ifdef XTASK_SWS
 	xtask_debug(0, 0, "XTASK_SimpleWS enabled.\n");
 #endif // XTASK_SWS

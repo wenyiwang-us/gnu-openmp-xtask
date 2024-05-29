@@ -74,7 +74,7 @@
 #endif
 #define GOMP_USE_XQUEUE 1
 // #define GOMP_USE_XWS 1 // use xworkshares/workstealing
-// #define GOMP_USE_XPERFLOG 1
+#define GOMP_USE_XPERFLOG 1
 // #define XTASK_LLWS 1
 // #define XTASK_SWS 1 // simple ws
 // #define XTASK_RANDOM_WS 1
@@ -1001,11 +1001,30 @@ typedef struct xws {
 
 
 #ifdef XTASK_ENABLE_STATS 
+
+#define XSTATS_MAX_EVENTS 1<<26 // 64MB events
+typedef enum xstats_event{
+  XSTATS_NULL           = 0,
+  XSTATS_REQ_SENT       = 1,
+  XSTATS_REQ_HANDLED    = 2,
+  XSTATS_NO_REQ         = 3,
+} xstats_type_t;
+
+typedef struct xstats_data_cell{
+  unsigned long long ts;
+  xstats_type_t event;
+  unsigned long long v0; // value 0, in ws, it is the round number
+  unsigned long long v1; // value 1, in ws, it is the number of requests
+  unsigned long long v2;
+} xstats_data_cell_t;
+
 typedef struct xstats_data {
-  unsigned long long nreqs_handled;
-  unsigned long long nreqs_sent;
-  unsigned long long ntasks_stolen;
+  char fname[128]; // file name path
+  xstats_data_cell_t *sd; // stats data
+  unsigned long long edix; // index of the log
 } xstats_data_t;
+
+
 
 #endif // XTASK_ENABLE_STATS
 
@@ -1388,6 +1407,12 @@ extern void xperflog_dump(struct gomp_thread *);
 extern void xperflog_reset(struct gomp_thread *);
 extern void xperflog_dump_reset();
 #endif // GOMP_USE_XPERFLOG
+
+#ifdef XTASK_ENABLE_STATS
+extern void xstats_init();
+extern void xstats_record(xstats_type_t, unsigned long long, unsigned long long, unsigned long long);
+extern void xstats_dump(struct gomp_thread *);
+#endif
 
 #endif // GOMP_USE_XQUEUE
 /* team.c */
