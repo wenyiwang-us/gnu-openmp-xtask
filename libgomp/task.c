@@ -735,16 +735,6 @@ static inline void handle_reqs(unsigned long *last_req_q){
 			#ifdef XTASK_ENABLE_STATS
 			xstats_nreq_handled++;
 			#endif
-			// xtask_debug(0, 1, "handle_req from T#%d, qid=%lu, round=%lu, req=%lu, nin=%lld, nout=%lld,",
-			// WS_REQ2TID(req), 
-			// thr->last_req_q_accessed, 
-			// task_q->round, 
-			// req,
-			// task_q->nin,
-			// task_q->nout
-			// );
-			// push tasks to thief
-			// if in - out > 2, then we can push half
 			unsigned ttid = WS_REQ2TID(req);
 			struct gomp_thread *tthr = thr->thread_pool->threads[ttid]; //thief thread
 			unsigned qid_of_thief = ttid < tid ? thr->num_queues + ttid - tid : ttid - tid;
@@ -796,16 +786,6 @@ static inline void handle_reqs(unsigned long *last_req_q){
 			#ifdef XTASK_ENABLE_STATS
 			xstats_nreq_handled++;
 			#endif
-			// xtask_debug(0, 1, "handle_req from T#%d, qid=%lu, round=%lu, req=%lu, nin=%lld, nout=%lld,",
-			// WS_REQ2TID(req), 
-			// qid, 
-			// task_q->round, 
-			// req,
-			// task_q->nin,
-			// task_q->nout
-			// );
-			// push tasks to thief
-			// if in - out > 2, then we can push half
 			unsigned ttid = WS_REQ2TID(req);
 			struct gomp_thread *tthr = thr->thread_pool->threads[ttid]; //thief thread
 			unsigned qid_of_thief = ttid < tid ? thr->num_queues + ttid - tid : ttid - tid;
