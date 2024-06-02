@@ -837,13 +837,17 @@ enum rbwsflag{
 
 struct rbws{
   volatile uint64_t round;
-  volatile uint64_t* req_q;
+  // volatile uint64_t* req_q;
+  volatile uint64_t req;
   int req_q_size;
   unsigned int req_head;
   unsigned int req_tail;
   volatile int redirect_tid;
   volatile int nredirects;
   volatile int nre; // number of redirected push for current redirect
+  unsigned long long ntasks_pushed;
+  unsigned long long ntasks_executed;
+  unsigned long long ntasks_generated;
 };
 // struct rbws_request_q{
 //   volatile uint64_t **reqs; // task queue, an array of tasks' pointers
@@ -1151,13 +1155,14 @@ struct gomp_thread
 #endif // XTASK_RANDOM_WS
 
 #ifdef XTASK_RANDOM_BWS
+
   int nvictims;
   int nreq_checks;
   int steal_divider;
   int max_wait_countdown;
   unsigned long last_req_q_accessed;
   unsigned long last_req_q;
-  struct rbws *rbws;
+  volatile struct rbws *rbws;
 #endif // XTASK_RANDOM_BWS
 
 

@@ -695,16 +695,14 @@ static inline void send_reqs(){
 	for(int i = 0; i < nvictims; i++){
 		while((vtid = myrand() % nthreads)== thr->ts.team_id);
 		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
-		struct rbws *rbws = vthr->rbws;
-		rbws->req_q[rbws->req_head] = WS_TID2REQ(thr->ts.team_id) | rbws->round;
-		// FIXME: This can be overwritten, but we don't know how much yet
-		// new request can overwrite the old one, we don't care as we want to address the newest possible
-		rbws->req_head = (rbws->req_head + 1) & REQ_Q_MASK(vthr);
+		volatile struct rbws *vrbws = vthr->rbws;
+		if(WS_REQ2ROUND(vrbws->req) < vrbws->round){
+			vrbws->req = WS_TID2REQ(thr->ts.team_id) | vrbws->round;
+			#ifdef XTASK_ENABLE_STATS
+			stats_nreqs_sent++;
+			#endif // XTASK_ENABLE_STATS
+		}
 
-		#ifdef XTASK_ENABLE_STATS
-		stats_nreqs_sent++;
-		#endif // XTASK_ENABLE_STATS
-		
 	}
 	#ifdef XTASK_ENABLE_STATS
 	xstats_record(XSTATS_REQ_SENT, stats_nreqs, stats_nreqs_sent, 0);
@@ -713,19 +711,20 @@ static inline void send_reqs(){
 
 static inline void handle_reqs(unsigned long *last_req_q){
 	struct gomp_thread *thr = gomp_thread();
-	// unsigned tid = thr->ts.team_id;
-	struct rbws *rbws = thr->rbws;
-	// directly check the tail of the req_q
-	// if not -1, meaning we are in the process of redirecting tasks
-	if((rbws->redirect_tid == -1) && (rbws->req_q[rbws->req_tail] != 0)){
-		// this is a valid req, we will handle it
-		/**
-		 * strategy:
-		 * we will just send tasks to the thief without knowing if I am high load or not
-		*/
-		unsigned ttid = WS_REQ2TID(rbws->req_q[rbws->req_tail]);
-		rbws->redirect_tid = ttid;
+	volatile struct rbws *rbws = thr->rbws;
+	if(rbws->round == WS_REQ2ROUND(rbws->req)){
+		// push tasks to thief
+		rbws->redirect_tid = WS_REQ2TID(rbws->req);
+		rbws->nre = 0;
+		#ifdef XTASK_ENABLE_STATS
+		xstats_record(XSTATS_REQ_HANDLED, npushed, 0, 0);
+		#endif
+	}else{
+		rbws->redirect_tid = -1;
 	}
+
+
+
 }
 
 #endif // XTASK_RANDOM_BWS
@@ -780,19 +779,24 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 			}
 	}
 	#ifdef XTASK_RANDOM_BWS
-	thr->rbws = (struct rbws *)gomp_malloc(sizeof(struct rbws));
+	thr->rbws = (struct rbws *)gomp_malloc(sizeof(volatile struct rbws));
 	thr->rbws->round = 1;
+	thr->rbws->req = 0;
+	thr->rbws->ntasks_executed = 0;
+	thr->rbws->ntasks_pushed =  0;
+	thr->rbws->ntasks_generated = 0;
 	thr->rbws->req_q_size = INITIAL_TASK_DEQUE_SIZE;
 	thr->rbws->req_head = 0;
 	thr->rbws->req_tail = 0;
 	thr->rbws->nre = 0;
 	thr->rbws->redirect_tid = -1;
 	thr->rbws->nredirects = INITIAL_TASK_DEQUE_SIZE >> thr->steal_divider;
-	thr->rbws->req_q = (uint64_t *)gomp_malloc(sizeof(uint64_t) * INITIAL_TASK_DEQUE_SIZE); // just use same size as the task deque
-	// memset(thr->rbws->req_q, 0, sizeof(uint64_t) * INITIAL_TASK_DEQUE_SIZE);
-	for(int i = 0; i < thr->rbws->req_q_size; i++){
-		thr->rbws->req_q[i] = 0;
-	}
+	
+	// thr->rbws->req_q = (uint64_t *)gomp_malloc(sizeof(uint64_t) * INITIAL_TASK_DEQUE_SIZE); // just use same size as the task deque
+	// // memset(thr->rbws->req_q, 0, sizeof(uint64_t) * INITIAL_TASK_DEQUE_SIZE);
+	// for(int i = 0; i < thr->rbws->req_q_size; i++){
+	// 	thr->rbws->req_q[i] = 0;
+	// }
 	#endif
 	return;
 };
@@ -810,25 +814,18 @@ gomp_push_task(struct gomp_task *task){
 	unsigned long last_q = thr->last_q;
 	struct gomp_thread *target_thr;
 
-	#ifdef XTASK_RANDOM_WS
-	rws_t *rws = &thr->rws;
-	// check requests
-	if(rws->round == WS_REQ2ROUND(rws->req)){
-		int ttid = WS_REQ2TID(rws->req);
-		int qid = ttid < gtid ?thr->num_queues + ttid - gtid : ttid - gtid;
-		// xtask_debug(0, 0, "handle_req from T#%d, qid=%d, round=%ld, req=%ld, batchsize=%d, num_queue=%d", ttid, qid, rws->round, rws->req, rws->batch_size, thr->num_queues);
-		last_q = qid;
-		rws->round++;
-	}
-	#endif
-
 	unsigned long target_tid; // starting target tid
 
 	#ifdef XTASK_RANDOM_BWS
-	struct rbws *rbws = thr->rbws;
+	volatile struct rbws *rbws = thr->rbws;
+	bool target_full = false;
+	rbws->ntasks_generated++;
+	xtask_debug(0, 0, "ntasks_generated=%lld", rbws->ntasks_generated);
+	
 	if(rbws->redirect_tid == -1){
 	#endif
-		xtask_debug(0, 0, "normal push");
+		
+		xtask_debug(0, 0, "normal push, ntasks_pushed=%lld", rbws->ntasks_pushed);
 
 		target_tid = gtid + last_q;
 		target_tid = (target_tid > team->nthreads - 1) ? (target_tid - team->nthreads) : target_tid;
@@ -849,12 +846,12 @@ gomp_push_task(struct gomp_task *task){
 	#ifdef XTASK_RANDOM_BWS
 	}else{
 		// redirect tasks to the target_tid
-		bool target_full = false;
+		
 		target_tid =(unsigned long) rbws->redirect_tid;
 		last_q = target_tid < gtid ? gtid - target_tid : target_tid - gtid;
-		xtask_debug(0, 0, "Handle steal from T#%d, thr->last_q=%ld, mygtid=%ld, lastq#%ld, ttid=%ld", rbws->redirect_tid, thr->last_q, gtid, last_q, target_tid);
+		// xtask_debug(0, 0, "Handle steal from T#%d, thr->last_q=%ld, mygtid=%ld, lastq#%ld, ttid=%ld", rbws->redirect_tid, thr->last_q, gtid, last_q, target_tid);
 		rbws->nre++;
-
+		xtask_debug(0, 0, "redirected, ntasks_pushed=%lld", rbws->ntasks_pushed);
 		// TODO: this is other ways to make sure it is serial
 		if (team->nthreads <= 1)
 			target_thr = thr;
@@ -866,23 +863,24 @@ gomp_push_task(struct gomp_task *task){
 			if (num_tries < 25)
 				continue;
 			target_full = true;
-			xtask_debug(0, 0, "target full, nre=%d, nredirects=%d, redirect_tid=%d, target_tid=%ld, target_qid=%ld", rbws->nre, rbws->nredirects, rbws->redirect_tid, target_tid, last_q);
-			// xtask_debug(0, 0, "target full, nre=%d, nredirects=%d, redirect_tid=%d", rbws->nre, rbws->nredirects, rbws->redirect_tid);
+			xtask_debug(0, 0, "full");
+			break;
 		}
 
 		if(rbws->nre > rbws->nredirects || target_full){
 			rbws->nre = 0;
 			rbws->redirect_tid = -1;
-			rbws->req_q[rbws->req_tail] = 0; // req is handled
-			rbws->req_tail = (rbws->req_tail + 1) & REQ_Q_MASK(thr);
-
+			rbws->round++;
+			// xtask_debug(0, 0, "target full, nre=%d, nredirects=%d, redirect_tid=%d, target_tid=%ld, target_qid=%ld, req_round=%ld, round=%ld", rbws->nre, rbws->nredirects, rbws->redirect_tid, target_tid, last_q, WS_REQ2ROUND(rbws->req), rbws->round);
+		
 			// now everything is set to default mode, try again.
-			return gomp_push_task(task);
+			return TASK_NOT_PUSHED;
 		}
 
 	}
 	#endif
-
+	if(target_full == true)
+		xtask_debug(0, 0, "this shall never happen");
 	struct gomp_taskq *task_q = target_thr->td_task_q[last_q];
 	task_q->nin++; // Will it be reordered by compilers or CPU?. it doesn't matter
 	task_q->td_deque[task_q->td_deque_head] = task;
@@ -904,6 +902,7 @@ gomp_push_task(struct gomp_task *task){
 
 	#ifdef XTASK_RANDOM_BWS
 	}
+	rbws->ntasks_pushed++;
 	#endif
 
 	return TASK_SUCCESSFULLY_PUSHED;
@@ -1132,10 +1131,9 @@ static inline unsigned long long xperflog_get_fref(xperf_type_t event){
 	return perflog->frefc[event];
 }
 
-
 void xperflog_init(){
 	struct gomp_thread *thr = gomp_thread();
-	struct xperflog *perflog = &thr->xperflog;
+	struct xperflog *perflog = &thr->xperfl
 	perflog->xperflog_path = getenv("XPERFLOG_PATH");
 	
 	// team thread's init may be called multiple times, prevent this by checking generation
@@ -1306,8 +1304,18 @@ void xomp_perflog_dump(void){
 	xstats_dump(thr);
 	#endif
 	#ifndef GOMP_USE_XPERFLOG
-	if(thr->ts.team_id == 0)
-		xtask_debug(0, 0, "xperflog - dump: perflog is not enabled.");
+	if(thr->ts.team_id == 0){
+		xtask_debug(0, 0, "xperflog - dump: perflog is not enabled.\n\n\n\n");
+		unsigned long long ntasks_pushed = 0;
+		unsigned long long ntasks_generated = 0;
+		for(int i = 0; i < thr->ts.team->nthreads; i++){
+			ntasks_pushed += thr->thread_pool->threads[i]->rbws->ntasks_pushed;
+			ntasks_generated += thr->thread_pool->threads[i]->rbws->ntasks_generated;
+		}
+		xtask_debug(0, 0, "total: ntasks_pushed=%lld", ntasks_pushed);
+		xtask_debug(0, 0, "total: ntasks_generated=%lld", ntasks_generated);
+	}
+		
 	#endif // GOMP_USE_XPERFLOG
 
 }
