@@ -74,12 +74,12 @@
 #endif
 #define GOMP_USE_XQUEUE 1
 // #define GOMP_USE_XWS 1 // use xworkshares/workstealing
-#define GOMP_USE_XPERFLOG 1
+// #define GOMP_USE_XPERFLOG 1
 // #define XTASK_LLWS 1
 // #define XTASK_SWS 1 // simple ws
 // #define XTASK_RANDOM_WS 1
 #define XTASK_RANDOM_BWS 1 // random batch workstealing
-#define XTASK_ENABLE_STATS 1
+// #define XTASK_ENABLE_STATS 1
 
 // #define XTASK_WORKSHARE 1
 
@@ -825,8 +825,9 @@ struct gomp_team
 
 #define N_VICTIMS 4
 #define N_REQ_CHECKS 4
-#define STEAL_DIVIDER 2 // 2 means half of the tasks are stolen
+#define STEAL_DIVIDER 0 // now this means shift right 0 bits
 #define MAX_WAIT_COUNTDOWN 1000 // in loops
+#define REQ_Q_MASK(vthr) ((vthr)->rbws->req_q_size - 1) 
 
 enum rbwsflag{
   RBWS_INIT_VAL = 0,
@@ -834,7 +835,21 @@ enum rbwsflag{
   RBWS_REQ_RECEIVED = 2,
 };
 
-
+struct rbws{
+  volatile uint64_t round;
+  volatile uint64_t* req_q;
+  int req_q_size;
+  unsigned int req_head;
+  unsigned int req_tail;
+  volatile int redirect_tid;
+  volatile int nredirects;
+  volatile int nre; // number of redirected push for current redirect
+};
+// struct rbws_request_q{
+//   volatile uint64_t **reqs; // task queue, an array of tasks' pointers
+//   unsigned int head; // head of the queue
+//   unsigned int tail; // tail of the queue
+// };
 #endif
 
 
@@ -872,10 +887,12 @@ struct gomp_taskq{
 */
   volatile long long nin; // number of tasks pushed in
   volatile long long nout; // number of tasks popped out 
-  #ifdef XTASK_RANDOM_BWS
-  volatile uint64_t round;
-  volatile uint64_t req;
-  #endif
+  // #ifdef XTASK_RANDOM_BWS
+  // volatile uint64_t round;
+  // volatile uint64_t req;
+  // volatile unsigned int ws_head; 
+  // volatile unsigned int ws_tail;
+  // #endif
 };
 
 /* This structure is used for tree barreir sync, and detect barrier termination*/
@@ -1140,6 +1157,7 @@ struct gomp_thread
   int max_wait_countdown;
   unsigned long last_req_q_accessed;
   unsigned long last_req_q;
+  struct rbws *rbws;
 #endif // XTASK_RANDOM_BWS
 
 

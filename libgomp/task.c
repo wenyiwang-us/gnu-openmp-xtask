@@ -685,8 +685,8 @@ static inline void send_reqs(){
 	struct gomp_thread *thr = gomp_thread();
 	int nthreads = thr->ts.team->nthreads;
 	int nvictims = thr->nvictims;
-	unsigned vtid, vqid;
-
+	// unsigned vtid, vqid;
+	unsigned vtid;
 	#ifdef XTASK_ENABLE_STATS
 	unsigned long long stats_nreqs_sent = 0;
 	unsigned long long stats_nreqs = (unsigned long long) nvictims;
@@ -694,18 +694,17 @@ static inline void send_reqs(){
 
 	for(int i = 0; i < nvictims; i++){
 		while((vtid = myrand() % nthreads)== thr->ts.team_id);
-		vqid = myrand() % nthreads;
 		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
-		// send req to vtid
-		uint64_t round = vthr->td_task_q[vqid]->round;
-		if(WS_REQ2ROUND(vthr->td_task_q[vqid]->req) < round){
-			vthr->td_task_q[vqid]->req = WS_TID2REQ(thr->ts.team_id) | round;
-			vthr->last_req_q_accessed = vqid;
+		struct rbws *rbws = vthr->rbws;
+		rbws->req_q[rbws->req_head] = WS_TID2REQ(thr->ts.team_id) | rbws->round;
+		// FIXME: This can be overwritten, but we don't know how much yet
+		// new request can overwrite the old one, we don't care as we want to address the newest possible
+		rbws->req_head = (rbws->req_head + 1) & REQ_Q_MASK(vthr);
 
-			#ifdef XTASK_ENABLE_STATS
-			stats_nreqs_sent++;
-			#endif // XTASK_ENABLE_STATS
-		}
+		#ifdef XTASK_ENABLE_STATS
+		stats_nreqs_sent++;
+		#endif // XTASK_ENABLE_STATS
+		
 	}
 	#ifdef XTASK_ENABLE_STATS
 	xstats_record(XSTATS_REQ_SENT, stats_nreqs, stats_nreqs_sent, 0);
@@ -714,131 +713,19 @@ static inline void send_reqs(){
 
 static inline void handle_reqs(unsigned long *last_req_q){
 	struct gomp_thread *thr = gomp_thread();
-	unsigned tid = thr->ts.team_id;
-	uint64_t req = 0;
-	struct gomp_taskq *task_q = NULL;
-	unsigned long long nreqc = 1;
-	int num_tries;
-	bool full;
-	int nreq_checks = thr->nreq_checks;
-	int steal_divider = thr->steal_divider;
-
-	#ifdef XTASK_ENABLE_STATS
-	unsigned long long xstats_ntasks_stolen = 0;
-	unsigned long long xstats_nreq_handled = 0;
-	#endif
-
-	if(thr->last_req_q_accessed > 0){
-		task_q = thr->td_task_q[thr->last_req_q_accessed];
-		req = task_q->req;
-		if(WS_REQ2ROUND(req) == task_q->round){
-			#ifdef XTASK_ENABLE_STATS
-			xstats_nreq_handled++;
-			#endif
-			unsigned ttid = WS_REQ2TID(req);
-			struct gomp_thread *tthr = thr->thread_pool->threads[ttid]; //thief thread
-			unsigned qid_of_thief = ttid < tid ? thr->num_queues + ttid - tid : ttid - tid;
-			struct gomp_taskq *thief_task_q = tthr->td_task_q[qid_of_thief];
-
-			long long ntasks = (task_q->nin - task_q->nout) / STEAL_DIVIDER;
-			if(ntasks > 1){
-				for(int i = 0; i < ntasks; i++){
-					num_tries = 0;
-					full = false;
-					while(thief_task_q->td_deque[thief_task_q->td_deque_head] != NULL){
-						num_tries++;
-						if(num_tries < 25)
-							continue;
-						full = true;
-						break;
-					}
-					if(full)
-						break;
-					gomp_task_t *task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
-					if(task == NULL)
-						break;
-					task_q->td_deque[task_q->td_deque_tail] = NULL;
-					task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
-					task_q->nout++;
-					// push to thief's q
-					#ifdef XTASK_ENABLE_STATS
-					xstats_ntasks_stolen++;
-					#endif
-
-					thief_task_q->nin++;
-					thief_task_q->td_deque[thief_task_q->td_deque_head] = task;
-					thief_task_q->td_deque_head = (thief_task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
-				}
-				
-				tthr->last_q_accessed = qid_of_thief;
-			
-			}
-			task_q->round++;
-		}
+	// unsigned tid = thr->ts.team_id;
+	struct rbws *rbws = thr->rbws;
+	// directly check the tail of the req_q
+	// if not -1, meaning we are in the process of redirecting tasks
+	if((rbws->redirect_tid == -1) && (rbws->req_q[rbws->req_tail] != 0)){
+		// this is a valid req, we will handle it
+		/**
+		 * strategy:
+		 * we will just send tasks to the thief without knowing if I am high load or not
+		*/
+		unsigned ttid = WS_REQ2TID(rbws->req_q[rbws->req_tail]);
+		rbws->redirect_tid = ttid;
 	}
-
-	// either the last_req_accessed is 0 or the round is not matched
-	unsigned long qid = *last_req_q;
-	for( ;nreqc < nreq_checks && qid > 0; qid--, nreqc++){
-		task_q = thr->td_task_q[qid];
-		req = task_q->req;
-		if(WS_REQ2ROUND(req) == task_q->round){
-			#ifdef XTASK_ENABLE_STATS
-			xstats_nreq_handled++;
-			#endif
-			unsigned ttid = WS_REQ2TID(req);
-			struct gomp_thread *tthr = thr->thread_pool->threads[ttid]; //thief thread
-			unsigned qid_of_thief = ttid < tid ? thr->num_queues + ttid - tid : ttid - tid;
-			struct gomp_taskq *thief_task_q = tthr->td_task_q[qid_of_thief];
-
-			long long ntasks = (task_q->nin - task_q->nout) / steal_divider;
-			if(ntasks > 1){
-				for(int i = 0; i < ntasks; i++){
-					num_tries = 0;
-					full = false;
-					// abort if the thief's q is full
-					while(thief_task_q->td_deque[thief_task_q->td_deque_head] != NULL){
-						num_tries++;
-						if(num_tries < 25)
-							continue;
-						full = true;
-						break;
-					}
-					if(full)
-						break;
-					gomp_task_t *task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
-					if(task == NULL)
-						break;
-					task_q->td_deque[task_q->td_deque_tail] = NULL;
-					task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
-					task_q->nout++;
-					// push to thief's q
-					#ifdef XTASK_ENABLE_STATS
-					xstats_ntasks_stolen++;
-					#endif
-	
-					thief_task_q->nin++;
-					thief_task_q->td_deque[thief_task_q->td_deque_head] = task;
-					thief_task_q->td_deque_head = (thief_task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
-				}
-				
-				tthr->last_q_accessed = qid_of_thief;
-			}
-			
-			task_q->round++;
-		}
-
-	}
-
-	#ifdef XTASK_ENABLE_STATS
-	xstats_record(XSTATS_REQ_HANDLED, (unsigned long long) nreq_checks, xstats_nreq_handled, xstats_ntasks_stolen);
-	#endif
-
-	if(qid > 0)
-		*last_req_q = qid;
-	else
-		*last_req_q = 0;
-
 }
 
 #endif // XTASK_RANDOM_BWS
@@ -888,25 +775,25 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 			thr->td_task_q[queue_id]->nin = 0;
 			thr->td_task_q[queue_id]->nout = 0;
 
-			#ifdef XTASK_RANDOM_BWS
-			thr->td_task_q[queue_id]->req = 0;
-			thr->td_task_q[queue_id]->round = 1;
-			#endif
-
 			for(int i = 0; i < thr->td_deque_size; i++){
 				thr->td_task_q[queue_id]->td_deque[i] = NULL;
 			}
 	}
-	#ifdef XTASK_LLWS
-	xws_init();
+	#ifdef XTASK_RANDOM_BWS
+	thr->rbws = (struct rbws *)gomp_malloc(sizeof(struct rbws));
+	thr->rbws->round = 1;
+	thr->rbws->req_q_size = INITIAL_TASK_DEQUE_SIZE;
+	thr->rbws->req_head = 0;
+	thr->rbws->req_tail = 0;
+	thr->rbws->nre = 0;
+	thr->rbws->redirect_tid = -1;
+	thr->rbws->nredirects = INITIAL_TASK_DEQUE_SIZE >> thr->steal_divider;
+	thr->rbws->req_q = (uint64_t *)gomp_malloc(sizeof(uint64_t) * INITIAL_TASK_DEQUE_SIZE); // just use same size as the task deque
+	// memset(thr->rbws->req_q, 0, sizeof(uint64_t) * INITIAL_TASK_DEQUE_SIZE);
+	for(int i = 0; i < thr->rbws->req_q_size; i++){
+		thr->rbws->req_q[i] = 0;
+	}
 	#endif
-	#ifdef XTASK_SWS
-	xtask_ws_init();
-	#endif
-	#ifdef XTASK_RANDOM_WS
-	rws_init();
-	#endif
-
 	return;
 };
 
@@ -920,39 +807,9 @@ gomp_push_task(struct gomp_task *task){
 
 	// Check if deque is full
 	int num_tries = 0;
-	#ifdef XTASK_WORKSHARE
-	int nthreads = team->nthreads;
-	int num_thr_tried = 0;
 	unsigned long last_q = thr->last_q;
-	unsigned long target_tid;
 	struct gomp_thread *target_thr;
 
-	do{
-		num_tries = 0;
-		target_tid = gtid + last_q;
-		target_tid = (target_tid > nthreads - 1) ? (target_tid - nthreads) : target_tid;
-		target_thr = thr->thread_pool->threads[target_tid];
-		num_thr_tried++;
-		if (num_thr_tried > 1)
-			return TASK_NOT_PUSHED;
-
-		while(target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
-			num_tries++;
-			if (num_tries < 25)
-				continue;
-			break;
-		}
-
-		if(target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] == NULL)
-			break;
-
-		last_q = last_q + 1 < nthreads ? last_q + 1 : 0;
-
-	}while(1);
-
-	#else
-
-	unsigned long last_q = thr->last_q;
 	#ifdef XTASK_RANDOM_WS
 	rws_t *rws = &thr->rws;
 	// check requests
@@ -965,37 +822,89 @@ gomp_push_task(struct gomp_task *task){
 	}
 	#endif
 
-	unsigned long target_tid = gtid + last_q; // starting target tid
+	unsigned long target_tid; // starting target tid
 
-	target_tid = (target_tid > team->nthreads - 1) ? (target_tid - team->nthreads) : target_tid;
+	#ifdef XTASK_RANDOM_BWS
+	struct rbws *rbws = thr->rbws;
+	if(rbws->redirect_tid == -1){
+	#endif
+		xtask_debug(0, 0, "normal push");
 
-	struct gomp_thread *target_thr;
-	// TODO: this is other ways to make sure it is serial
-	if (team->nthreads <= 1)
-		target_thr = thr;
-	else
-		target_thr = thr->thread_pool->threads[target_tid]; //ww: does this pointer the same across threads? - seems so
+		target_tid = gtid + last_q;
+		target_tid = (target_tid > team->nthreads - 1) ? (target_tid - team->nthreads) : target_tid;
+		
+		// TODO: this is other ways to make sure it is serial
+		if (team->nthreads <= 1)
+			target_thr = thr;
+		else
+			target_thr = thr->thread_pool->threads[target_tid]; //ww: does this pointer the same across threads? - seems so
 
-	while (target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
-		num_tries++;
-		if (num_tries < 25)
-			continue;
-		return TASK_NOT_PUSHED;
+		while (target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
+			num_tries++;
+			if (num_tries < 25)
+				continue;
+			return TASK_NOT_PUSHED;
+		}
+
+	#ifdef XTASK_RANDOM_BWS
+	}else{
+		// redirect tasks to the target_tid
+		bool target_full = false;
+		target_tid =(unsigned long) rbws->redirect_tid;
+		last_q = target_tid < gtid ? gtid - target_tid : target_tid - gtid;
+		xtask_debug(0, 0, "Handle steal from T#%d, thr->last_q=%ld, mygtid=%ld, lastq#%ld, ttid=%ld", rbws->redirect_tid, thr->last_q, gtid, last_q, target_tid);
+		rbws->nre++;
+
+		// TODO: this is other ways to make sure it is serial
+		if (team->nthreads <= 1)
+			target_thr = thr;
+		else
+			target_thr = thr->thread_pool->threads[target_tid]; //ww: does this pointer the same across threads? - seems so
+
+		while (target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
+			num_tries++;
+			if (num_tries < 25)
+				continue;
+			target_full = true;
+			xtask_debug(0, 0, "target full, nre=%d, nredirects=%d, redirect_tid=%d, target_tid=%ld, target_qid=%ld", rbws->nre, rbws->nredirects, rbws->redirect_tid, target_tid, last_q);
+			// xtask_debug(0, 0, "target full, nre=%d, nredirects=%d, redirect_tid=%d", rbws->nre, rbws->nredirects, rbws->redirect_tid);
+		}
+
+		if(rbws->nre > rbws->nredirects || target_full){
+			rbws->nre = 0;
+			rbws->redirect_tid = -1;
+			rbws->req_q[rbws->req_tail] = 0; // req is handled
+			rbws->req_tail = (rbws->req_tail + 1) & REQ_Q_MASK(thr);
+
+			// now everything is set to default mode, try again.
+			return gomp_push_task(task);
+		}
+
 	}
 	#endif
+
 	struct gomp_taskq *task_q = target_thr->td_task_q[last_q];
 	task_q->nin++; // Will it be reordered by compilers or CPU?. it doesn't matter
 	task_q->td_deque[task_q->td_deque_head] = task;
 	task_q->td_deque_head = (task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
 	target_thr->last_q_accessed = last_q;
 
-	if (thr->num_queues > 1){
-		last_q++;
-		if (last_q < thr->num_queues)
-			thr->last_q = last_q;
-		else
-			thr->last_q = 0;
+	#ifdef XTASK_RANDOM_BWS
+	// only change the last_q when it is not in the process of redirecting tasks
+	if(rbws->redirect_tid == -1){
+	#endif
+
+		if (thr->num_queues > 1){
+			last_q++;
+			if (last_q < thr->num_queues)
+				thr->last_q = last_q;
+			else
+				thr->last_q = 0;
+		}
+
+	#ifdef XTASK_RANDOM_BWS
 	}
+	#endif
 
 	return TASK_SUCCESSFULLY_PUSHED;
 };
