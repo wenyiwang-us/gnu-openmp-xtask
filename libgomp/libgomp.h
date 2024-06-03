@@ -73,15 +73,9 @@
 # pragma GCC visibility push(hidden)
 #endif
 #define GOMP_USE_XQUEUE 1
-// #define GOMP_USE_XWS 1 // use xworkshares/workstealing
-// #define GOMP_USE_XPERFLOG 1
-// #define XTASK_LLWS 1
-// #define XTASK_SWS 1 // simple ws
-// #define XTASK_RANDOM_WS 1
+#define GOMP_USE_XPERFLOG 1
 #define XTASK_RANDOM_BWS 1 // random batch workstealing
 // #define XTASK_ENABLE_STATS 1
-
-// #define XTASK_WORKSHARE 1
 
 
 /* If we were a C++ library, we'd get this from <std/atomic>.  */
@@ -848,6 +842,8 @@ struct rbws{
   unsigned long long ntasks_pushed;
   unsigned long long ntasks_executed;
   unsigned long long ntasks_generated;
+  unsigned long long ntasks_not_pushed;
+  unsigned long long ntasks_not_pushed0;
 };
 // struct rbws_request_q{
 //   volatile uint64_t **reqs; // task queue, an array of tasks' pointers
