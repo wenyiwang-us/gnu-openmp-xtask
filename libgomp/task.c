@@ -66,9 +66,12 @@ htab_eq (hash_entry_type x, hash_entry_type y)
 */
 unsigned short lfsr = 0xACE1u;
 unsigned bit;
+unsigned g_seed = 123;
 unsigned myrand(){
-    bit  = ((lfsr >> 0) ^ (lfsr >> 2) ^ (lfsr >> 3) ^ (lfsr >> 5) ) & 1;
-    return lfsr =  (lfsr >> 1) | (bit << 15);
+	g_seed = (214013*g_seed+2531011);
+	return (g_seed>>16)&0x7FFF;
+    // bit  = ((lfsr >> 0) ^ (lfsr >> 2) ^ (lfsr >> 3) ^ (lfsr >> 5) ) & 1;
+    // return lfsr =  (lfsr >> 1) | (bit << 15);
 }
 
 // declare the functions
@@ -125,8 +128,10 @@ void xstats_dump(struct gomp_thread *thr){
 
 #ifdef XTASK_RANDOM_BWS
 #include <stdio.h>
+#include <time.h>
 void ws_get_env_vars(){
 	struct gomp_thread *thr = gomp_thread();
+	g_seed = time(NULL);
 	
 	char *env;
 	env = getenv("N_VICTIMS");
@@ -338,12 +343,8 @@ gomp_push_task(struct gomp_task *task){
 		// redirect tasks to the target_tid
 		
 		target_tid =(unsigned long) rbws->redirect_tid;
-		last_q = target_tid > gtid ? target_tid - gtid : target_tid - gtid + team->nthreads;
-		// xtask_debug(0, 0, "Handle steal from T#%d, thr->last_q=%ld, mygtid=%ld, lastq#%ld, ttid=%ld", rbws->redirect_tid, thr->last_q, gtid, last_q, target_tid);
+		last_q = target_tid < gtid ? target_tid - gtid + team->nthreads : target_tid - gtid;
 		rbws->nre++;
-		// xtask_debug(0, 0, "redirected, ntasks_pushed=%lld", rbws->ntasks_pushed);
-		// TODO: this is other ways to make sure it is serial
-		// xtask_debug(0, 0, "Redirect push from T#%ld to T#%ld, qid=%ld", gtid, target_tid, last_q);
 		if (team->nthreads <= 1)
 			target_thr = thr;
 		else
@@ -354,7 +355,6 @@ gomp_push_task(struct gomp_task *task){
 			if (num_tries < 25)
 				continue;
 			target_full = true;
-			// xtask_debug(0, 0, "full");
 			break;
 		}
 
@@ -362,8 +362,6 @@ gomp_push_task(struct gomp_task *task){
 			rbws->nre = 0;
 			rbws->redirect_tid = -1;
 			rbws->round++;
-			// xtask_debug(0, 0, "target full, nre=%d, nredirects=%d, redirect_tid=%d, target_tid=%ld, target_qid=%ld, req_round=%ld, round=%ld", rbws->nre, rbws->nredirects, rbws->redirect_tid, target_tid, last_q, WS_REQ2ROUND(rbws->req), rbws->round);
-		
 			// now everything is set to default mode, try again.
 			return gomp_push_task(task);
 		}
