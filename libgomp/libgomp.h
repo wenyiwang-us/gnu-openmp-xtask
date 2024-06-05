@@ -830,10 +830,15 @@ typedef enum xstats_type{
   WS_REQ_SEND_FAILED = 1,
   WS_REQ_HANDLE_SUCCESS = 2,
   WS_REQ_HANDLE_FAILED = 3,
-  WS_NORMARL_PUSH = 4,
-  WS_REDIRECT_PUSH = 5,
 
-  WS_STATS_SIZE = 6,
+  WS_NORMAL_PUSH_SUCCESS = 4,
+  WS_NORMAL_PUSH_FAILED = 5,
+  WS_REDIRECT_PUSH_SUCCESS = 6,
+  WS_REDIRECT_NORMAL_PUSH_SUCCESS = 7,
+  WS_REDIRECT_NORMAL_PUSH_FAILED = 8, // failed to do a normal push after redirect failed.
+  
+
+  WS_STATS_SIZE = 9,
 } xstats_type_t;
 
 #endif
@@ -854,6 +859,7 @@ struct rbws{
   volatile int nredirects;
   volatile int nre; // number of redirected push for current redirect
   #ifdef XTASK_ENABLE_WS_STATS
+  int ws_flag;
   unsigned long long ws_stats[WS_STATS_SIZE];
   #endif
 };

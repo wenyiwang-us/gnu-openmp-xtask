@@ -282,6 +282,7 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	thr->rbws->redirect_tid = -1;
 	thr->rbws->nredirects = INITIAL_TASK_DEQUE_SIZE >> thr->steal_divider;
 	#ifdef XTASK_ENABLE_WS_STATS
+	thr->rbws->ws_flag = 0;
 	for(int i = 0; i < WS_STATS_SIZE; i++)
 		thr->rbws->ws_stats[i] = 0;
 	#endif
@@ -322,10 +323,23 @@ gomp_push_task(struct gomp_task *task){
 			num_tries++;
 			if (num_tries < 25)
 				continue;
+			#ifdef XTASK_ENABLE_WS_STATS
+			if(rbws->ws_flag == WS_REDIRECT_NORMAL_PUSH_SUCCESS){
+				rbws->ws_flag = 0;
+				rbws->ws_stats[WS_REDIRECT_NORMAL_PUSH_FAILED]++;
+			}else{
+				rbws->ws_stats[WS_NORMAL_PUSH_FAILED]++;
+			}
+			#endif
 			return TASK_NOT_PUSHED;
 		}
 		#ifdef XTASK_ENABLE_WS_STATS
-		rbws->ws_stats[WS_NORMARL_PUSH]++;
+		if(rbws->ws_flag == WS_REDIRECT_NORMAL_PUSH_SUCCESS){
+			rbws->ws_flag = 0;
+			rbws->ws_stats[WS_REDIRECT_NORMAL_PUSH_SUCCESS]++;
+		}else{
+			rbws->ws_stats[WS_NORMAL_PUSH_SUCCESS]++;
+		}
 		#endif
 
 	#ifdef XTASK_RANDOM_BWS
@@ -352,11 +366,14 @@ gomp_push_task(struct gomp_task *task){
 			rbws->nre = 0;
 			rbws->redirect_tid = -1;
 			rbws->round++;
+			#ifdef XTASK_ENABLE_WS_STATS
+			rbws->ws_flag = WS_REDIRECT_NORMAL_PUSH_SUCCESS;
+			#endif
 			// now everything is set to default mode, try again.
 			return gomp_push_task(task);
 		}
 		#ifdef XTASK_ENABLE_WS_STATS
-		rbws->ws_stats[WS_REDIRECT_PUSH] ++;
+		rbws->ws_stats[WS_REDIRECT_PUSH_SUCCESS] ++;
 		#endif
 
 	}
@@ -736,14 +753,18 @@ void xperflog_dump(struct gomp_thread *thr){
 		xtask_debug(0, 0, "xperf - dump: wsstats file pointer is null.");
 		return;
 	}
-	fprintf(wsfp, "tid, req_send_success, req_send_failed, req_handle_success, req_handle_failed, normal_push, redirect_push\n");
-	fprintf(wsfp, "%d,%llu,%llu,%llu,%llu,%llu,%llu\n", thr->ts.team_id, 
+	fprintf(wsfp, "tid,req_send_success,req_send_failed,req_handle_success,req_handle_failed,normal_push_success,normal_push_failed,redirect_push_success,redirect_normal_push_success,redirect_normal_push_failed\n");
+	fprintf(wsfp, "%d,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld\n",
+		thr->ts.team_id,
 		thr->rbws->ws_stats[WS_REQ_SEND_SUCCESS],
 		thr->rbws->ws_stats[WS_REQ_SEND_FAILED],
 		thr->rbws->ws_stats[WS_REQ_HANDLE_SUCCESS],
 		thr->rbws->ws_stats[WS_REQ_HANDLE_FAILED],
-		thr->rbws->ws_stats[WS_NORMARL_PUSH],
-		thr->rbws->ws_stats[WS_REDIRECT_PUSH]
+		thr->rbws->ws_stats[WS_NORMAL_PUSH_SUCCESS],
+		thr->rbws->ws_stats[WS_NORMAL_PUSH_FAILED],
+		thr->rbws->ws_stats[WS_REDIRECT_PUSH_SUCCESS],
+		thr->rbws->ws_stats[WS_REDIRECT_NORMAL_PUSH_SUCCESS],
+		thr->rbws->ws_stats[WS_REDIRECT_NORMAL_PUSH_FAILED]
 	);
 	fclose(wsfp);
 	#endif
