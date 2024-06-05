@@ -75,6 +75,7 @@
 #define GOMP_USE_XQUEUE 1
 #define GOMP_USE_XPERFLOG 1
 #define XTASK_RANDOM_BWS 1 // random batch workstealing
+#define XTASK_ENABLE_WS_STATS 1
 // #define XTASK_ENABLE_STATS 1
 
 
@@ -823,6 +824,19 @@ struct gomp_team
 #define MAX_WAIT_COUNTDOWN 1000 // in loops
 #define REQ_Q_MASK(vthr) ((vthr)->rbws->req_q_size - 1) 
 
+#ifdef XTASK_ENABLE_WS_STATS
+typedef enum xstats_type{
+  WS_REQ_TRY_SEND = 0,
+  WS_REQ_SENT = 1,
+  WS_REQ_TRY_HANDLE = 2,
+  WS_REQ_HANDLED = 3,
+  WS_NORMARL_PUSH = 4,
+  WS_REDIRECT_PUSH = 5,
+
+  WS_STATS_SIZE = 6,
+} xstats_type_t;
+
+#endif
 enum rbwsflag{
   RBWS_INIT_VAL = 0,
   RBWS_STEALING = 1,
@@ -839,11 +853,9 @@ struct rbws{
   volatile int redirect_tid;
   volatile int nredirects;
   volatile int nre; // number of redirected push for current redirect
-  unsigned long long ntasks_pushed;
-  unsigned long long ntasks_executed;
-  unsigned long long ntasks_generated;
-  unsigned long long ntasks_not_pushed;
-  unsigned long long ntasks_not_pushed0;
+  #ifdef XTASK_ENABLE_WS_STATS
+  unsigned long long ws_stats[WS_STATS_SIZE];
+  #endif
 };
 // struct rbws_request_q{
 //   volatile uint64_t **reqs; // task queue, an array of tasks' pointers
@@ -853,28 +865,6 @@ struct rbws{
 #endif
 
 
-#ifdef XTASK_RANDOM_WS
-// Work stealing requests
-#define RWS_STEAL_PENDING 0
-#define RWS_STEAL_SENT 1
-#define RWS_STEAL_FAILED 2
-#define RWS_BATCH_SIZE 8
-enum rwsflag{
-  RWS_INIT_VAL = 0,
-  RWS_STEALING = 1,
-  RWS_REQ_RECEIVED = 2,
-
-};
-
-typedef struct rws{
-  volatile uint64_t round;
-  volatile uint64_t req;
-  enum rwsflag flag;
-  int batch_size;
-  int victims[RWS_BATCH_SIZE];
-} rws_t;
-
-#endif
 
 /* This structure contains task queue for xqueue implementation. */
 struct gomp_taskq{
@@ -887,12 +877,6 @@ struct gomp_taskq{
 */
   volatile long long nin; // number of tasks pushed in
   volatile long long nout; // number of tasks popped out 
-  // #ifdef XTASK_RANDOM_BWS
-  // volatile uint64_t round;
-  // volatile uint64_t req;
-  // volatile unsigned int ws_head; 
-  // volatile unsigned int ws_tail;
-  // #endif
 };
 
 /* This structure is used for tree barreir sync, and detect barrier termination*/
@@ -915,106 +899,7 @@ struct xflag{
 }
 __attribute__((aligned(64)));
 
-#ifdef XTASK_SWS // simple workstealing
 
-#define HIGH_LOAD (INITIAL_TASK_DEQUE_SIZE * 4 / 8)
-#define LOW_LOAD (INITIAL_TASK_DEQUE_SIZE * 1 / 8)
-
-
-#define WS_REQ_SENT 0
-#define WS_REQ_FAILED 1
-#define WS_REQ_PENDING 2
-
-// push tasks related
-#define WS_TASK_NOT_PUSHED 0
-#define WS_TASK_PUSHED 1
-
-
-
-enum wsflag{
-WS_INITIAL = 0,
-WS_STEALING = 1,
-};
-typedef struct wsload_info{
-  long long high_load;
-  long long low_load;
-} ws_load_info_t;
-
-typedef struct ws_info{
-  ws_load_info_t info;
-  volatile uint64_t round;
-  volatile uint64_t req;
-  volatile long long load; // updated by thief or me after push; ok to have race
-  int last_thr;
-  unsigned long last_qid;
-  enum wsflag flag;
-  // long long *loads;
-} wsi_t __attribute__((aligned(64)));
-
-#endif
-
-
-#ifdef XTASK_LLWS
-/**
- * XWS related fields.
-*/
-
-#define XWS_BATCH_SIZE 8
-
-#define XWS_TID_TO_HIGH_BITS(a) ((uint64_t)(a) << 40)
-#define XWS_REQ_TO_ROUND(a) ((a) & (uint64_t)((1ULL << 40) - 1))
-#define XWS_REQ_TO_TID(a) ((int)((a) >> 40))
-
-
-#define XWS_VERY_LOW 1 // an arbitrary number
-#define XWS_LOW ((INITIAL_TASK_DEQUE_SIZE >> 2)) // an arbitrary number
-#define XWS_HIGH ((INITIAL_TASK_DEQUE_SIZE * 3 / 8)) // an arbitrary number
-
-enum xws_flag{
-  XWS_INIT_VAL = 0,
-  XWS_STEALING = 1,
-
-  XWS_TASK_QUEUE_FULL = 2,
-};
-
-typedef struct load_state{
-  unsigned very_low; // > 0
-  unsigned low;
-  unsigned high;
-} load_state_t __attribute__((aligned(64)));
-
-typedef struct load_info_cell{
-  volatile long long ldi; // load index
-  volatile bool visited;
-} load_info_cell_t;
-
-typedef struct load_info{
-  int qid; // current qid of xq, owner: me
-  int last_updated_tid; // last updated tid, owner: me
-  long long tsum; // total accumulated sum of tasks. owner: me
-  long long *tsums; // total prefix sum of tasks owner: me
-  volatile load_info_cell_t *lds; // loads, ower: all
-} load_info_t __attribute__((aligned(64)));
-
-typedef struct xws {
-  unsigned batch_size; // batch size of requests sent at each round; init early
-  load_state_t ld_states; // load states, init early
-  enum xws_flag flag; // flag, owner: me
-  unsigned num_tries; // number of tries, owner: me
-  unsigned nreqs; // number of out requests/victims: owner: me
-  int last_req_qid;
-  volatile uint64_t round; // accssed by all threads, owner: all
-  volatile uint64_t req; // accessed by all threads, owner: all
-  int victims[XWS_BATCH_SIZE]; // victims I steal from.
-  load_info_t ld_info; // load info
-    // {idx, tsum, tsums, lds {idx, flag}}
-
-  // debug usage
-  unsigned long long nops; // number of operations
-} xws_t __attribute__((aligned(64)));
-
-
-#endif // XTASK_LLWS
 
 
 #ifdef XTASK_ENABLE_STATS 
@@ -1096,6 +981,7 @@ typedef struct xperflog {
   long long ssum; // sample sum
   char *xperflog_path;
   char filename[64]; // log file name
+  char wsstats_fname[64];
   void *fp; // use void * instead of FILE * to avoid including stdio.h here
 
   int tid; // thread id

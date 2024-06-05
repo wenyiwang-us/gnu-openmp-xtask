@@ -187,37 +187,35 @@ static inline void send_reqs(){
 		while((vtid = myrand() % nthreads)== thr->ts.team_id);
 		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
 		volatile struct rbws *vrbws = vthr->rbws;
+		#ifdef XTASK_ENABLE_WS_STATS
+		vrbws->ws_stats[WS_REQ_TRY_SEND] ++;
+		#endif
 		if(WS_REQ2ROUND(vrbws->req) < vrbws->round){
 			vrbws->req = WS_TID2REQ(thr->ts.team_id) | vrbws->round;
-			#ifdef XTASK_ENABLE_STATS
-			stats_nreqs_sent++;
-			#endif // XTASK_ENABLE_STATS
+			#ifdef XTASK_ENABLE_WS_STATS
+			vrbws->ws_stats[WS_REQ_SENT] ++;
+			#endif
 		}
-
 	}
-	#ifdef XTASK_ENABLE_STATS
-	xstats_record(XSTATS_REQ_SENT, stats_nreqs, stats_nreqs_sent, 0);
-	#endif
 }
 
 static inline void handle_reqs(unsigned long *last_req_q){
 	struct gomp_thread *thr = gomp_thread();
 	volatile struct rbws *rbws = thr->rbws;
+	#ifdef XTASK_ENABLE_WS_STATS
+	rbws->ws_stats[WS_REQ_TRY_HANDLE] ++;
+	#endif
 	if(rbws->round == WS_REQ2ROUND(rbws->req)){
 		// push tasks to thief
 		rbws->redirect_tid = WS_REQ2TID(rbws->req);
 		rbws->nre = 0;
-		#ifdef XTASK_ENABLE_STATS
-		xstats_record(XSTATS_REQ_HANDLED, npushed, 0, 0);
+		#ifdef XTASK_ENABLE_WS_STATS
+		rbws->ws_stats[WS_REQ_HANDLED] ++;
 		#endif
 
 	}else{
 		rbws->redirect_tid = -1;
 	}
-
-	// rbws->redirect_tid = -1; // try always default
-
-
 }
 
 #endif // XTASK_RANDOM_BWS
@@ -275,23 +273,16 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	thr->rbws = (struct rbws *)gomp_malloc(sizeof(volatile struct rbws));
 	thr->rbws->round = 1;
 	thr->rbws->req = 0;
-	thr->rbws->ntasks_executed = 0;
-	thr->rbws->ntasks_pushed =  0;
-	thr->rbws->ntasks_generated = 0;
 	thr->rbws->req_q_size = INITIAL_TASK_DEQUE_SIZE;
 	thr->rbws->req_head = 0;
 	thr->rbws->req_tail = 0;
 	thr->rbws->nre = 0;
 	thr->rbws->redirect_tid = -1;
 	thr->rbws->nredirects = INITIAL_TASK_DEQUE_SIZE >> thr->steal_divider;
-	thr->rbws->ntasks_not_pushed = 0;
-	thr->rbws->ntasks_not_pushed0 = 0;
-	
-	// thr->rbws->req_q = (uint64_t *)gomp_malloc(sizeof(uint64_t) * INITIAL_TASK_DEQUE_SIZE); // just use same size as the task deque
-	// // memset(thr->rbws->req_q, 0, sizeof(uint64_t) * INITIAL_TASK_DEQUE_SIZE);
-	// for(int i = 0; i < thr->rbws->req_q_size; i++){
-	// 	thr->rbws->req_q[i] = 0;
-	// }
+	#ifdef XTASK_ENABLE_WS_STATS
+	for(int i = 0; i < WS_STATS_SIZE; i++)
+		thr->rbws->ws_stats[i] = 0;
+	#endif
 	#endif
 	return;
 };
@@ -313,17 +304,12 @@ gomp_push_task(struct gomp_task *task){
 	#ifdef XTASK_RANDOM_BWS
 	volatile struct rbws *rbws = thr->rbws;
 	bool target_full = false;
-	// rbws->ntasks_generated++;
-	// xtask_debug(0, 0, "ntasks_generated=%lld", rbws->ntasks_generated);
 	
 	if(rbws->redirect_tid == -1){
 	#endif
-		
-		// xtask_debug(0, 0, "normal push, ntasks_pushed=%lld", rbws->ntasks_pushed);
 
 		target_tid = gtid + last_q;
 		target_tid = (target_tid > team->nthreads - 1) ? (target_tid - team->nthreads) : target_tid;
-		// xtask_debug(0, 0, "Normal push to T#%ld, qid=%ld", target_tid, last_q);
 		// TODO: this is other ways to make sure it is serial
 		if (team->nthreads <= 1)
 			target_thr = thr;
@@ -334,9 +320,11 @@ gomp_push_task(struct gomp_task *task){
 			num_tries++;
 			if (num_tries < 25)
 				continue;
-			// rbws->ntasks_not_pushed0++;
 			return TASK_NOT_PUSHED;
 		}
+		#ifdef XTASK_ENABLE_WS_STATS
+		rbws->ws_stats[WS_NORMARL_PUSH]++;
+		#endif
 
 	#ifdef XTASK_RANDOM_BWS
 	}else{
@@ -365,6 +353,9 @@ gomp_push_task(struct gomp_task *task){
 			// now everything is set to default mode, try again.
 			return gomp_push_task(task);
 		}
+		#ifdef XTASK_ENABLE_WS_STATS
+		rbws->ws_stats[WS_REDIRECT_PUSH] ++;
+		#endif
 
 	}
 	#endif
@@ -389,7 +380,6 @@ gomp_push_task(struct gomp_task *task){
 
 	#ifdef XTASK_RANDOM_BWS
 	}
-	// rbws->ntasks_pushed++;
 	#endif
 
 	return TASK_SUCCESSFULLY_PUSHED;
@@ -595,12 +585,8 @@ static void xflag_done(struct xflag * flag, gomp_barrier_state_t bs){
 		}
 		// if not, we set our bit at parent to 1 (done)
 		GOMP_ATOMIC_ST_REL(&flag->parent->child_done[flag->cidx], 1);
-		// xtask_debug(0, 0, "done, nchild=%d, child=%ld, %ld, cidx=%d, parent's child = %ld, %ld, parentflag=%p",
-		// flag->nchild,
-		// flag->child_done[0], flag->child_done[1], flag->cidx
-		// , flag->parent->child_done[0], flag->parent->child_done[1],
-		// flag->parent);
-	}
+		
+		}
 }
 
 
@@ -636,6 +622,9 @@ void xperflog_init(){
 	perflog->fp = NULL;
 	// append tid to the filename
 	snprintf(perflog->filename, 64, "%s/xperflog_%d_%d.csv", perflog->xperflog_path, thr->ts.team_id, perflog->generation);
+	#ifdef XTASK_ENABLE_WS_STATS
+	snprintf(perflog->wsstats_fname, 64, "%s/wsstats_%d.csv", perflog->xperflog_path, thr->ts.team_id);
+	#endif
 	perflog->log = (xperflog_cell_t *)gomp_malloc(sizeof(xperflog_cell_t) * XPERFLOG_MAX_EVENTS);
 	perflog->eidx = 0;
 	perflog->last_q = 0;
@@ -738,6 +727,25 @@ void xperflog_dump(struct gomp_thread *thr){
 		perflog->log[i].lfref,  
 		perflog->log[i].sample);
 	}
+
+	#ifdef XTASK_ENABLE_WS_STATS
+	FILE *wsfp = fopen(perflog->wsstats_fname, "w");
+	if(wsfp == NULL){
+		xtask_debug(0, 0, "xperf - dump: wsstats file pointer is null.");
+		return;
+	}
+	fprintf(wsfp, "tid,req_try_send,req_sent,req_try_handle,req_handled,normal_push,redirect_push\n");
+	fprintf(wsfp, "%d,%llu,%llu,%llu,%llu,%llu,%llu\n", thr->ts.team_id, 
+	thr->rbws->ws_stats[WS_REQ_TRY_SEND],
+	thr->rbws->ws_stats[WS_REQ_SENT],
+	thr->rbws->ws_stats[WS_REQ_TRY_HANDLE],
+	thr->rbws->ws_stats[WS_REQ_HANDLED],
+	thr->rbws->ws_stats[WS_NORMARL_PUSH],
+	thr->rbws->ws_stats[WS_REDIRECT_PUSH]
+	);
+	fclose(wsfp);
+	#endif
+
 
 	fclose(perflog->fp);
 	perflog->fp = NULL;
