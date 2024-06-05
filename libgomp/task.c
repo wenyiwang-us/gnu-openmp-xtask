@@ -187,33 +187,35 @@ static inline void send_reqs(){
 		while((vtid = myrand() % nthreads)== thr->ts.team_id);
 		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
 		volatile struct rbws *vrbws = vthr->rbws;
-		#ifdef XTASK_ENABLE_WS_STATS
-		vrbws->ws_stats[WS_REQ_TRY_SEND] ++;
-		#endif
+
 		if(WS_REQ2ROUND(vrbws->req) < vrbws->round){
 			vrbws->req = WS_TID2REQ(thr->ts.team_id) | vrbws->round;
 			#ifdef XTASK_ENABLE_WS_STATS
-			vrbws->ws_stats[WS_REQ_SENT] ++;
+			vrbws->ws_stats[WS_REQ_SEND_SUCCESS] ++;
 			#endif
+			continue;
 		}
+		#ifdef XTASK_ENABLE_WS_STATS
+		vrbws->ws_stats[WS_REQ_SEND_FAILED] ++;
+		#endif
 	}
 }
 
 static inline void handle_reqs(unsigned long *last_req_q){
 	struct gomp_thread *thr = gomp_thread();
 	volatile struct rbws *rbws = thr->rbws;
-	#ifdef XTASK_ENABLE_WS_STATS
-	rbws->ws_stats[WS_REQ_TRY_HANDLE] ++;
-	#endif
 	if(rbws->round == WS_REQ2ROUND(rbws->req)){
 		// push tasks to thief
 		rbws->redirect_tid = WS_REQ2TID(rbws->req);
 		rbws->nre = 0;
 		#ifdef XTASK_ENABLE_WS_STATS
-		rbws->ws_stats[WS_REQ_HANDLED] ++;
+		rbws->ws_stats[WS_REQ_HANDLE_FAILED] ++;
 		#endif
 
 	}else{
+		#ifdef XTASK_ENABLE_WS_STATS
+		rbws->ws_stats[WS_REQ_HANDLE_SUCCESS] ++;
+		#endif
 		rbws->redirect_tid = -1;
 	}
 }
@@ -734,14 +736,14 @@ void xperflog_dump(struct gomp_thread *thr){
 		xtask_debug(0, 0, "xperf - dump: wsstats file pointer is null.");
 		return;
 	}
-	fprintf(wsfp, "tid,req_try_send,req_sent,req_try_handle,req_handled,normal_push,redirect_push\n");
+	fprintf(wsfp, "tid, req_send_success, req_send_failed, req_handle_success, req_handle_failed, normal_push, redirect_push\n");
 	fprintf(wsfp, "%d,%llu,%llu,%llu,%llu,%llu,%llu\n", thr->ts.team_id, 
-	thr->rbws->ws_stats[WS_REQ_TRY_SEND],
-	thr->rbws->ws_stats[WS_REQ_SENT],
-	thr->rbws->ws_stats[WS_REQ_TRY_HANDLE],
-	thr->rbws->ws_stats[WS_REQ_HANDLED],
-	thr->rbws->ws_stats[WS_NORMARL_PUSH],
-	thr->rbws->ws_stats[WS_REDIRECT_PUSH]
+		thr->rbws->ws_stats[WS_REQ_SEND_SUCCESS],
+		thr->rbws->ws_stats[WS_REQ_SEND_FAILED],
+		thr->rbws->ws_stats[WS_REQ_HANDLE_SUCCESS],
+		thr->rbws->ws_stats[WS_REQ_HANDLE_FAILED],
+		thr->rbws->ws_stats[WS_NORMARL_PUSH],
+		thr->rbws->ws_stats[WS_REDIRECT_PUSH]
 	);
 	fclose(wsfp);
 	#endif

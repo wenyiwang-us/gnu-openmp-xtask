@@ -826,10 +826,10 @@ struct gomp_team
 
 #ifdef XTASK_ENABLE_WS_STATS
 typedef enum xstats_type{
-  WS_REQ_TRY_SEND = 0,
-  WS_REQ_SENT = 1,
-  WS_REQ_TRY_HANDLE = 2,
-  WS_REQ_HANDLED = 3,
+  WS_REQ_SEND_SUCCESS = 0,
+  WS_REQ_SEND_FAILED = 1,
+  WS_REQ_HANDLE_SUCCESS = 2,
+  WS_REQ_HANDLE_FAILED = 3,
   WS_NORMARL_PUSH = 4,
   WS_REDIRECT_PUSH = 5,
 
