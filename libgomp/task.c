@@ -209,12 +209,12 @@ static inline void handle_reqs(unsigned long *last_req_q){
 		rbws->redirect_tid = WS_REQ2TID(rbws->req);
 		rbws->nre = 0;
 		#ifdef XTASK_ENABLE_WS_STATS
-		rbws->ws_stats[WS_REQ_HANDLE_FAILED] ++;
+		rbws->ws_stats[WS_REQ_HANDLE_SUCCESS] ++;
 		#endif
 
 	}else{
 		#ifdef XTASK_ENABLE_WS_STATS
-		rbws->ws_stats[WS_REQ_HANDLE_SUCCESS] ++;
+		rbws->ws_stats[WS_REQ_HANDLE_FAILED] ++;
 		#endif
 		rbws->redirect_tid = -1;
 	}
