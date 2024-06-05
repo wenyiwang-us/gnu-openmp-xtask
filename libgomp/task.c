@@ -208,10 +208,10 @@ static inline void handle_reqs(unsigned long *last_req_q){
 		// push tasks to thief
 		rbws->redirect_tid = WS_REQ2TID(rbws->req);
 		rbws->nre = 0;
+
 		#ifdef XTASK_ENABLE_WS_STATS
 		rbws->ws_stats[WS_REQ_HANDLE_SUCCESS] ++;
 		#endif
-
 	}else{
 		#ifdef XTASK_ENABLE_WS_STATS
 		rbws->ws_stats[WS_REQ_HANDLE_FAILED] ++;
@@ -368,6 +368,7 @@ gomp_push_task(struct gomp_task *task){
 			rbws->round++;
 			#ifdef XTASK_ENABLE_WS_STATS
 			rbws->ws_flag = WS_REDIRECT_NORMAL_PUSH_SUCCESS;
+			rbws->ws_stats[WS_REQ_PROCESSED]++;
 			#endif
 			// now everything is set to default mode, try again.
 			return gomp_push_task(task);
@@ -753,13 +754,14 @@ void xperflog_dump(struct gomp_thread *thr){
 		xtask_debug(0, 0, "xperf - dump: wsstats file pointer is null.");
 		return;
 	}
-	fprintf(wsfp, "tid,req_send_success,req_send_failed,req_handle_success,req_handle_failed,normal_push_success,normal_push_failed,redirect_push_success,redirect_normal_push_success,redirect_normal_push_failed\n");
-	fprintf(wsfp, "%d,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld\n",
+	fprintf(wsfp, "tid,req_send_success,req_send_failed,req_handle_success,req_handle_failed,req_processed,normal_push_success,normal_push_failed,redirect_push_success,redirect_normal_push_success,redirect_normal_push_failed\n");
+	fprintf(wsfp, "%d,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld\n",
 		thr->ts.team_id,
 		thr->rbws->ws_stats[WS_REQ_SEND_SUCCESS],
 		thr->rbws->ws_stats[WS_REQ_SEND_FAILED],
 		thr->rbws->ws_stats[WS_REQ_HANDLE_SUCCESS],
 		thr->rbws->ws_stats[WS_REQ_HANDLE_FAILED],
+		thr->rbws->ws_stats[WS_REQ_PROCESSED],
 		thr->rbws->ws_stats[WS_NORMAL_PUSH_SUCCESS],
 		thr->rbws->ws_stats[WS_NORMAL_PUSH_FAILED],
 		thr->rbws->ws_stats[WS_REDIRECT_PUSH_SUCCESS],
