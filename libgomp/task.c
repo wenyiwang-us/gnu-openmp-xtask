@@ -155,7 +155,7 @@ void ws_get_env_vars(){
 	env = getenv("STEAL_DIVIDER");
 	if(env == NULL){
 		thr->steal_divider = STEAL_DIVIDER;
-		// xtask_debug(0, 0, "WARNING: STEAL_DIVIDER is not set, using default value %d", STEAL_DIVIDER);
+		xtask_debug(0, 0, "WARNING: STEAL_DIVIDER is not set, using default value %d", STEAL_DIVIDER);
 	}else{
 		thr->steal_divider = atoi(env);
 		// xtask_debug(0, 0, "STEAL_DIVIDER=%d", thr->steal_divider);
@@ -245,7 +245,7 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	}
 	if(thr->steal_divider <= 0){
 		thr->steal_divider = STEAL_DIVIDER;
-		xtask_debug(0, 0, "WARNING: steal_divider is not set, using default value %d", STEAL_DIVIDER);
+		// xtask_debug(0, 0, "WARNING: steal_divider is not set, using default value %d", STEAL_DIVIDER);
 	}
 	if(thr->max_wait_countdown <= 0){
 		thr->max_wait_countdown = MAX_WAIT_COUNTDOWN;
