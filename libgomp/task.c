@@ -272,7 +272,7 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 			}
 	}
 	#ifdef XTASK_RANDOM_BWS
-	thr->rbws = (struct rbws *)gomp_malloc(sizeof(volatile struct rbws));
+	thr->rbws = (struct rbws *)gomp_malloc(sizeof(struct rbws));
 	thr->rbws->round = 1;
 	thr->rbws->req = 0;
 	thr->rbws->req_q_size = INITIAL_TASK_DEQUE_SIZE;

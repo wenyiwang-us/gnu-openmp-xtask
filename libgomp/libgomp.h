@@ -850,15 +850,14 @@ enum rbwsflag{
 };
 
 struct rbws{
-  volatile uint64_t round;
-  // volatile uint64_t* req_q;
-  volatile uint64_t req;
+  uint64_t round;
+  uint64_t req;
   int req_q_size;
   unsigned int req_head;
   unsigned int req_tail;
-  volatile int redirect_tid;
-  volatile int nredirects;
-  volatile int nre; // number of redirected push for current redirect
+  int redirect_tid;
+  int nredirects;
+  int nre; // number of redirected push for current redirect
   #ifdef XTASK_ENABLE_WS_STATS
   int ws_flag;
   unsigned long long ws_stats[WS_STATS_SIZE];
