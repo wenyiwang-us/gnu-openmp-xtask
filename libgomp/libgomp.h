@@ -823,6 +823,8 @@ struct gomp_team
 #define STEAL_DIVIDER 0 // now this means shift right 0 bits
 #define MAX_WAIT_COUNTDOWN 1000 // in loops
 #define REQ_Q_MASK(vthr) ((vthr)->rbws->req_q_size - 1) 
+#define CORES_PER_NZ 24 // number of cores per NUMA zone
+#define LOCAL_STEAL_PROB 200 // probability of local steal
 
 #ifdef XTASK_ENABLE_WS_STATS
 typedef enum xstats_type{
@@ -1047,6 +1049,8 @@ struct gomp_thread
   int nvictims;
   int nreq_checks;
   int steal_divider;
+  unsigned nz_leader;
+  int cores_per_nz;
   int max_wait_countdown;
   unsigned long last_req_q_accessed;
   unsigned long last_req_q;

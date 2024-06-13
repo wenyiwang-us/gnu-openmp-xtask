@@ -70,8 +70,6 @@ unsigned g_seed = 123;
 unsigned myrand(){
 	g_seed = (214013*g_seed+2531011);
 	return (g_seed>>16)&0x7FFF;
-    // bit  = ((lfsr >> 0) ^ (lfsr >> 2) ^ (lfsr >> 3) ^ (lfsr >> 5) ) & 1;
-    // return lfsr =  (lfsr >> 1) | (bit << 15);
 }
 
 // declare the functions
@@ -170,6 +168,16 @@ void ws_get_env_vars(){
 		// xtask_debug(0, 0, "MAX_WAIT_COUNTDOWN=%d", thr->max_wait_countdown);
 	}
 
+	env = getenv("CORES_PER_NZ");
+	if(env == NULL){
+		xtask_debug(0, 0, "CORES_PER_NZ is not set, using default value %d", CORES_PER_NZ);
+		thr->cores_per_nz = CORES_PER_NZ;
+	}else{
+		int cores_per_nz = atoi(env);
+		thr->cores_per_nz = cores_per_nz;
+		
+	}
+
 }
 
 static inline void send_reqs(){
@@ -178,13 +186,21 @@ static inline void send_reqs(){
 	int nvictims = thr->nvictims;
 	// unsigned vtid, vqid;
 	unsigned vtid;
+	unsigned nz_leader = thr->nz_leader;
 	#ifdef XTASK_ENABLE_STATS
 	unsigned long long stats_nreqs_sent = 0;
 	unsigned long long stats_nreqs = (unsigned long long) nvictims;
 	#endif // XTASK_ENABLE_STATS
 
 	for(int i = 0; i < nvictims; i++){
-		while((vtid = myrand() % nthreads)== thr->ts.team_id);
+		unsigned prob = myrand() & 0xFF;
+		while((vtid = myrand() % nthreads) == thr->ts.team_id);
+		if(prob < LOCAL_STEAL_PROB){
+			// local steal, vtid = thr->nz_leader
+			vtid = vtid % thr->cores_per_nz;
+			vtid = nz_leader + vtid;
+		}
+		
 		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
 		volatile struct rbws *vrbws = vthr->rbws;
 
@@ -226,7 +242,6 @@ void
 gomp_alloc_task_q(struct gomp_thread *thr){
 	if (thr->num_queues == 0)
 		thr->num_queues = gomp_num_task_queues;
-	
 	thr->last_q = 0;
 	thr->last_q_accessed = 0;
 	#ifdef XTASK_ENABLE_STATS
@@ -250,6 +265,11 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	if(thr->max_wait_countdown <= 0){
 		thr->max_wait_countdown = MAX_WAIT_COUNTDOWN;
 		xtask_debug(0, 0, "WARNING: max_wait_countdown is not set, using default value %d", MAX_WAIT_COUNTDOWN);
+	}
+
+	if(thr->cores_per_nz <= 0){
+		thr->cores_per_nz = CORES_PER_NZ;
+		xtask_debug(0, 0, "WARNING: cores_per_nz is not set, using default value %d", CORES_PER_NZ);
 	}
 	#endif
 	
@@ -281,6 +301,7 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	thr->rbws->nre = 0;
 	thr->rbws->redirect_tid = -1;
 	thr->rbws->nredirects = INITIAL_TASK_DEQUE_SIZE >> thr->steal_divider;
+	thr->nz_leader = thr->ts.team_id / thr->cores_per_nz * thr->cores_per_nz;
 	#ifdef XTASK_ENABLE_WS_STATS
 	thr->rbws->ws_flag = 0;
 	for(int i = 0; i < WS_STATS_SIZE; i++)

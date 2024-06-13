@@ -67,6 +67,7 @@ struct gomp_thread_start_data
   int nreq_checks;
   int steal_divider;
   int max_wait_countdown;
+  int cores_per_nz;
 #endif
 #endif
 };
@@ -121,6 +122,7 @@ gomp_thread_start (void *xdata)
 		thr->nreq_checks = data->nreq_checks;
 		thr->steal_divider = data->steal_divider;
 		thr->max_wait_countdown = data->max_wait_countdown;
+		thr->cores_per_nz = data->cores_per_nz;
 	}
 	// xtask_debug(0, 0, "XTASK v.1.4, use_xq=%d, nvictims=%d, nreq_checks=%d, steal_divider=%d, max_wait_countdown=%d", thr->use_xq, thr->nvictims, thr->nreq_checks, thr->steal_divider, thr->max_wait_countdown);
 #endif
@@ -385,7 +387,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 #ifdef XTASK_RANDOM_BWS
 if(thr->use_xq){
 	ws_get_env_vars();
-	xtask_debug(0, 0, "XTASK_RandomBWS: N_VICTIMS=%d, N_REQ_CHECKS=%d, STEAL_DIVIDER=%d, MAX_WAIT_COUNTDOWN=%d\n", thr->nvictims, thr->nreq_checks, thr->steal_divider, thr->max_wait_countdown);
+	xtask_debug(0, 0, "XTASK_RandomBWS: N_VICTIMS=%d, N_REQ_CHECKS=%d, STEAL_DIVIDER=%d, MAX_WAIT_COUNTDOWN=%d, CORES_PER_NZ=%d\n", thr->nvictims, thr->nreq_checks, thr->steal_divider, thr->max_wait_countdown, thr->cores_per_nz);
 }
 #endif // XTASK_RANDOM_BWS
 if(thr->use_xq && thr->td_task_q == NULL)
@@ -837,6 +839,7 @@ if(thr->use_xq && thr->td_task_q == NULL)
 	  start_data->nreq_checks = thr->nreq_checks;
 	  start_data->steal_divider = thr->steal_divider;
 	  start_data->max_wait_countdown = thr->max_wait_countdown;
+	  start_data->cores_per_nz = thr->cores_per_nz;
 #endif
       if (__builtin_expect (gomp_places_list != NULL, 0))
 	{
