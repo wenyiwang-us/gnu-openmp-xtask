@@ -852,9 +852,9 @@ enum rbwsflag{
 struct rbws{
   uint64_t round;
   uint64_t req;
-  int req_q_size;
-  unsigned int req_head;
-  unsigned int req_tail;
+  // int req_q_size;
+  // unsigned int req_head;
+  // unsigned int req_tail;
   int redirect_tid;
   int nredirects;
   int nre; // number of redirected push for current redirect
@@ -1050,7 +1050,7 @@ struct gomp_thread
   int max_wait_countdown;
   unsigned long last_req_q_accessed;
   unsigned long last_req_q;
-  volatile struct rbws *rbws;
+  struct rbws *rbws;
 #endif // XTASK_RANDOM_BWS
 
 

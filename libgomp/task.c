@@ -275,9 +275,9 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	thr->rbws = (struct rbws *)gomp_malloc(sizeof(struct rbws));
 	thr->rbws->round = 1;
 	thr->rbws->req = 0;
-	thr->rbws->req_q_size = INITIAL_TASK_DEQUE_SIZE;
-	thr->rbws->req_head = 0;
-	thr->rbws->req_tail = 0;
+	// thr->rbws->req_q_size = INITIAL_TASK_DEQUE_SIZE;
+	// thr->rbws->req_head = 0;
+	// thr->rbws->req_tail = 0;
 	thr->rbws->nre = 0;
 	thr->rbws->redirect_tid = -1;
 	thr->rbws->nredirects = INITIAL_TASK_DEQUE_SIZE >> thr->steal_divider;
@@ -305,7 +305,7 @@ gomp_push_task(struct gomp_task *task){
 	unsigned long target_tid; // starting target tid
 
 	#ifdef XTASK_RANDOM_BWS
-	volatile struct rbws *rbws = thr->rbws;
+	struct rbws *rbws = thr->rbws;
 	bool target_full = false;
 	
 	if(rbws->redirect_tid == -1){
