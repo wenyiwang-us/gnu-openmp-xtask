@@ -186,6 +186,7 @@ static inline void send_reqs(){
 	int nvictims = thr->nvictims;
 	// unsigned vtid, vqid;
 	unsigned vtid;
+	unsigned mytid = thr->ts.team_id;
 	unsigned nz_leader = thr->nz_leader;
 	#ifdef XTASK_ENABLE_STATS
 	unsigned long long stats_nreqs_sent = 0;
@@ -194,7 +195,7 @@ static inline void send_reqs(){
 
 	for(int i = 0; i < nvictims; i++){
 		unsigned prob = myrand() & 0xFF;
-		while((vtid = myrand() % nthreads) == thr->ts.team_id);
+		while((vtid = myrand() % nthreads) == mytid);
 		if(prob < LOCAL_STEAL_PROB){
 			// local steal, vtid = thr->nz_leader
 			vtid = vtid % thr->cores_per_nz;
@@ -202,7 +203,7 @@ static inline void send_reqs(){
 		}
 		
 		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
-		volatile struct rbws *vrbws = vthr->rbws;
+		struct rbws *vrbws = vthr->rbws;
 
 		if(WS_REQ2ROUND(vrbws->req) < vrbws->round){
 			vrbws->req = WS_TID2REQ(thr->ts.team_id) | vrbws->round;
@@ -219,7 +220,7 @@ static inline void send_reqs(){
 
 static inline void handle_reqs(unsigned long *last_req_q){
 	struct gomp_thread *thr = gomp_thread();
-	volatile struct rbws *rbws = thr->rbws;
+	struct rbws *rbws = thr->rbws;
 	if(rbws->round == WS_REQ2ROUND(rbws->req)){
 		// push tasks to thief
 		rbws->redirect_tid = WS_REQ2TID(rbws->req);
