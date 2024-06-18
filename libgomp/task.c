@@ -251,15 +251,15 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	
 	#ifdef XTASK_RANDOM_BWS
 	thr->last_req_q_accessed = 0;
-	if(thr->nvictims <= 0 ){
+	if(thr->nvictims < 0 ){
 		thr->nvictims = N_VICTIMS;
 		xtask_debug(0, 0, "WARNING: nvictims is not set, using default value %d", N_VICTIMS);
 	}
-	if(thr->nreq_checks <=0 ){
+	if(thr->nreq_checks < 0 ){
 		thr->nreq_checks = N_REQ_CHECKS;
 		xtask_debug(0, 0, "WARNING: nreq_checks is not set, using default value %d", N_REQ_CHECKS);
 	}
-	if(thr->steal_divider <= 0){
+	if(thr->steal_divider < 0){
 		thr->steal_divider = STEAL_DIVIDER;
 		// xtask_debug(0, 0, "WARNING: steal_divider is not set, using default value %d", STEAL_DIVIDER);
 	}

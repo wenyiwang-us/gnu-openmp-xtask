@@ -73,9 +73,10 @@
 # pragma GCC visibility push(hidden)
 #endif
 #define GOMP_USE_XQUEUE 1
-#define GOMP_USE_XPERFLOG 1
+// #define GOMP_USE_XPERFLOG 1
 #define XTASK_RANDOM_BWS 1 // random batch workstealing
-#define XTASK_ENABLE_WS_STATS 1
+// #define XTASK_ENABLE_WS_STATS 1
+#define XTASK_FULL_LOCAL_STEAL 1
 // #define XTASK_ENABLE_STATS 1
 
 
@@ -824,7 +825,16 @@ struct gomp_team
 #define MAX_WAIT_COUNTDOWN 1000 // in loops
 #define REQ_Q_MASK(vthr) ((vthr)->rbws->req_q_size - 1) 
 #define CORES_PER_NZ 24 // number of cores per NUMA zone
+
+#ifdef XTASK_FULL_LOCAL_STEAL
+
+#define LOCAL_STEAL_PROB 255
+
+#else
+
 #define LOCAL_STEAL_PROB 200 // probability of local steal
+
+#endif
 
 #ifdef XTASK_ENABLE_WS_STATS
 typedef enum xstats_type{
