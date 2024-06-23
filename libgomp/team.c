@@ -383,7 +383,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	thr->use_xq = 1;
 	gomp_num_task_queues = nthreads;
 
-	xtask_debug(0, 0, "XTASK v.1.4, nthreads=%d, use_xq=%d, nested=%d, level=%d.", nthreads, thr->use_xq, nested, thr->ts.level);
+	xtask_debug(0, 0, "XTASK v.1.5, nthreads=%d, use_xq=%d, nested=%d, level=%d.", nthreads, thr->use_xq, nested, thr->ts.level);
 #ifdef XTASK_RANDOM_BWS
 if(thr->use_xq){
 	ws_get_env_vars();

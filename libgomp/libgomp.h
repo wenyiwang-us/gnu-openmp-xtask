@@ -75,9 +75,10 @@
 #define GOMP_USE_XQUEUE 1
 // #define GOMP_USE_XPERFLOG 1
 #define XTASK_RANDOM_BWS 1 // random batch workstealing
-// #define XTASK_ENABLE_WS_STATS 1
-#define XTASK_FULL_LOCAL_STEAL 1
+#define XTASK_ENABLE_WS_STATS 1
+// #define XTASK_FULL_LOCAL_STEAL 1
 // #define XTASK_ENABLE_STATS 1
+// #define XTASK_STATS 1
 
 
 /* If we were a C++ library, we'd get this from <std/atomic>.  */
@@ -808,6 +809,11 @@ struct gomp_team
 #define WS_TID2REQ(a) ((uint64_t)(a) << 40) // convert tid to request
 #define WS_REQ2ROUND(a) ((a) & (uint64_t)((1ULL << 40) - 1)) // convert request to round
 #define WS_REQ2TID(a) ((unsigned int)((a) >> 40)) // convert request to tid
+
+
+// XTASK_STATS data structure for each thread
+
+
 /**
  * XWS 
  * TODO: 
@@ -854,19 +860,39 @@ typedef enum xstats_type{
   WS_STATS_SIZE
 } xstats_type_t;
 
-#endif
 enum rbwsflag{
   RBWS_INIT_VAL = 0,
   RBWS_STEALING = 1,
   RBWS_REQ_RECEIVED = 2,
 };
+#endif // XTASK_ENABLE_WS_STATS
+#endif // XTASK_RANDOM_BWS
+
+
+enum xtask_stats_type{
+  XTASK_STATS_PUSHED,
+  XTASK_STATS_NOT_PUSHED,
+  XTASK_STATS_SIZE
+};
+
+typedef struct xtask_stats {
+  // tasks operations counters
+  unsigned long long stats[XTASK_STATS_SIZE];
+
+#if defined(XTASK_RANDOM_BWS) && defined(XTASK_ENBALE_WS_STATS)
+
+  int ws_flag;
+  unsigned long long ws_stats[WS_STATS_SIZE];
+
+#endif
+
+} xtask_stats_t;
+
+#ifdef XTASK_RANDOM_BWS
 
 struct rbws{
   uint64_t round;
   uint64_t req;
-  // int req_q_size;
-  // unsigned int req_head;
-  // unsigned int req_tail;
   int redirect_tid;
   int nredirects;
   int nre; // number of redirected push for current redirect
@@ -875,11 +901,6 @@ struct rbws{
   unsigned long long ws_stats[WS_STATS_SIZE];
   #endif
 };
-// struct rbws_request_q{
-//   volatile uint64_t **reqs; // task queue, an array of tasks' pointers
-//   unsigned int head; // head of the queue
-//   unsigned int tail; // tail of the queue
-// };
 #endif
 
 
@@ -1075,6 +1096,12 @@ struct gomp_thread
 #ifdef XTASK_ENABLE_STATS
   xstats_data_t xstats;
 #endif // XTASK_ENABLE_STATS
+
+#ifdef XTASK_STATS
+
+  xtask_stats_t xstats;
+  
+#endif  // XTASK_STATS
 #endif // GOMP_USE_XQUEUE
   /* This semaphore is used for ordered loops.  */
   gomp_sem_t release;

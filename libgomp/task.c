@@ -224,6 +224,7 @@ static inline void handle_reqs(unsigned long *last_req_q){
 	if(rbws->round == WS_REQ2ROUND(rbws->req)){
 		// push tasks to thief
 		rbws->redirect_tid = WS_REQ2TID(rbws->req);
+		// rbws->redirect_tid = -1;
 		rbws->nre = 0;
 
 		#ifdef XTASK_ENABLE_WS_STATS
@@ -239,6 +240,51 @@ static inline void handle_reqs(unsigned long *last_req_q){
 
 #endif // XTASK_RANDOM_BWS
 
+
+#ifdef XTASK_STATS
+
+static void xstats_dump(){
+	struct gomp_thread *thr = gomp_thread();
+	if(thr->ts.team_id != 0)
+		return;
+
+	unsigned long long ntasks_pushed = 0;
+	unsigned long long ntasks_not_pushed = 0;
+	for(int i = 0; i < thr->ts.team->nthreads; i++){
+		ntasks_pushed += thr->thread_pool->threads[i]->xstats.stats[XTASK_STATS_PUSHED];
+		ntasks_not_pushed += thr->thread_pool->threads[i]->xstats.stats[XTASK_STATS_NOT_PUSHED];
+	}
+	xtask_debug(0, 0, "ntasks_pushed=%llu, ntasks_not_pushed=%llu", ntasks_pushed, ntasks_not_pushed);
+}
+#endif // XTASK_STATS
+
+#ifdef XTASK_ENABLE_WS_STATS
+static void xstats_dump(){
+	struct gomp_thread *thr = gomp_thread();
+	if(thr->ts.team_id != 0)
+		return;
+	
+	unsigned long long xstats[WS_STATS_SIZE];
+	for(int i = 0; i < WS_STATS_SIZE; i++)
+		xstats[i] = 0;
+
+	for(int i = 0; i < thr->ts.team->nthreads; i++){
+		struct rbws *rbws = thr->thread_pool->threads[i]->rbws;
+		for(int j = 0; j < WS_STATS_SIZE; j++){
+			xstats[j] += rbws->ws_stats[j];
+		}
+	}
+
+	xtask_debug(0, 0, "WS_STATS: normal_push_success=%llu, normal_push_failed=%llu, redirect_push_success=%llu, redirect_normal_push_failed=%llu, redirect_normal_push_success=%llu.",
+	xstats[WS_NORMAL_PUSH_SUCCESS],
+	xstats[WS_NORMAL_PUSH_FAILED],
+	xstats[WS_REDIRECT_PUSH_SUCCESS],
+	xstats[WS_REDIRECT_NORMAL_PUSH_FAILED],
+	xstats[WS_REDIRECT_NORMAL_PUSH_SUCCESS]
+	);
+}
+#endif
+
 void
 gomp_alloc_task_q(struct gomp_thread *thr){
 	if (thr->num_queues == 0)
@@ -247,6 +293,11 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	thr->last_q_accessed = 0;
 	#ifdef XTASK_ENABLE_STATS
 	xstats_init(); // our stats is only useful after we use the q
+	#endif
+
+	#ifdef XTASK_STATS
+	for(int i = 0; i < XTASK_STATS_SIZE; i++)
+		thr->xstats.stats[i] = 0;
 	#endif
 	
 	#ifdef XTASK_RANDOM_BWS
@@ -353,6 +404,10 @@ gomp_push_task(struct gomp_task *task){
 				rbws->ws_stats[WS_NORMAL_PUSH_FAILED]++;
 			}
 			#endif
+
+			#ifdef XTASK_STATS
+			thr->xstats.stats[XTASK_STATS_NOT_PUSHED]++;
+			#endif
 			return TASK_NOT_PUSHED;
 		}
 		#ifdef XTASK_ENABLE_WS_STATS
@@ -362,6 +417,10 @@ gomp_push_task(struct gomp_task *task){
 		}else{
 			rbws->ws_stats[WS_NORMAL_PUSH_SUCCESS]++;
 		}
+		#endif
+	
+		#ifdef XTASK_STATS
+		thr->xstats.stats[XTASK_STATS_PUSHED]++;
 		#endif
 
 	#ifdef XTASK_RANDOM_BWS
@@ -393,6 +452,7 @@ gomp_push_task(struct gomp_task *task){
 			rbws->ws_stats[WS_REQ_PROCESSED]++;
 			#endif
 			// now everything is set to default mode, try again.
+			// return TASK_NOT_PUSHED;
 			return gomp_push_task(task);
 		}
 		#ifdef XTASK_ENABLE_WS_STATS
@@ -856,6 +916,11 @@ void xomp_perflog_dump(void){
 		xtask_debug(0, 0, "[XPERFLOG] DUMP: XPERFLOG is not enabled.\n\n\n\n");
 	}
 	#endif // GOMP_USE_XPERFLOG
+
+
+	#if defined(XTASK_STATS) || defined(XTASK_ENABLE_WS_STATS)
+	xstats_dump();
+	#endif
 
 }
 
