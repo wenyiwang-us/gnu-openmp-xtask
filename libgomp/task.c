@@ -285,22 +285,53 @@ static void xstats_dump(){
 }
 #endif
 
+
+#ifdef XTASK_RR_PUSH
+
+static inline void send_reqs(){
+	struct gomp_thread *thr = gomp_thread();
+	int nthreads = thr->ts.team->nthreads;
+	int nvictims = thr->nvictims;
+	// unsigned vtid, vqid;
+	unsigned vtid;
+	unsigned mytid = thr->ts.team_id;
+	#ifdef XTASK_ENABLE_WS_STATS
+	unsigned long long stats_nreqs_sent = 0;
+	unsigned long long stats_nreqs = (unsigned long long) nvictims;
+	#endif // XTASK_ENABLE_WS_STATS
+	for(int i = 0; i < nvictims; i++){
+		while((vtid = myrand() % nthreads) == mytid);
+		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
+		rrpush_t *vrrpush = vthr->rrpush;
+
+		if(WS_REQ2ROUND(vrrpush->req) < vrrpush->round){
+			vrrpush->req = WS_TID2REQ(thr->ts.team_id) | vrrpush->round;
+			continue;
+		}
+	}
+}
+
+static inline void handle_reqs(unsigned long *last_req_q){
+	struct gomp_thread *thr = gomp_thread();
+	rrpush_t *rrpush = thr->rrpush;
+	if(rrpush->redirect_tid == -1 && rrpush->round == WS_REQ2ROUND(rrpush->req)){
+		// push tasks to thief
+		rrpush->redirect_tid = WS_REQ2TID(rrpush->req);
+		rrpush->nre = 0;
+	}
+
+}
+#endif
+
 void
 gomp_alloc_task_q(struct gomp_thread *thr){
 	if (thr->num_queues == 0)
 		thr->num_queues = gomp_num_task_queues;
 	thr->last_q = 0;
 	thr->last_q_accessed = 0;
-	#ifdef XTASK_ENABLE_STATS
-	xstats_init(); // our stats is only useful after we use the q
-	#endif
 
-	#ifdef XTASK_STATS
-	for(int i = 0; i < XTASK_STATS_SIZE; i++)
-		thr->xstats.stats[i] = 0;
-	#endif
-	
-	#ifdef XTASK_RANDOM_BWS
+
+	#ifdef XTASK_RR_PUSH
 	thr->last_req_q_accessed = 0;
 	if(thr->nvictims < 0 ){
 		thr->nvictims = N_VICTIMS;
@@ -323,7 +354,7 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 		thr->cores_per_nz = CORES_PER_NZ;
 		xtask_debug(0, 0, "WARNING: cores_per_nz is not set, using default value %d", CORES_PER_NZ);
 	}
-	#endif
+	#endif // XTASK_RR_PUSH
 	
 	// thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * thr->num_queues);
 	thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * (thr->num_queues)); // with xws
@@ -343,23 +374,18 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 				thr->td_task_q[queue_id]->td_deque[i] = NULL;
 			}
 	}
-	#ifdef XTASK_RANDOM_BWS
-	thr->rbws = (struct rbws *)gomp_malloc(sizeof(struct rbws));
-	thr->rbws->round = 1;
-	thr->rbws->req = 0;
+	#ifdef XTASK_RR_PUSH
+	thr->rrpush = (rrpush_t *)gomp_malloc(sizeof(rrpush_t));
+	thr->rrpush->round = 1;
+	thr->rrpush->req = 0;
 	// thr->rbws->req_q_size = INITIAL_TASK_DEQUE_SIZE;
 	// thr->rbws->req_head = 0;
 	// thr->rbws->req_tail = 0;
-	thr->rbws->nre = 0;
-	thr->rbws->redirect_tid = -1;
-	thr->rbws->nredirects = INITIAL_TASK_DEQUE_SIZE >> thr->steal_divider;
+	thr->rrpush->nre = 0;
+	thr->rrpush->redirect_tid = -1;
+	thr->rrpush->nredirects = INITIAL_TASK_DEQUE_SIZE >> thr->steal_divider;
 	thr->nz_leader = thr->ts.team_id / thr->cores_per_nz * thr->cores_per_nz;
-	#ifdef XTASK_ENABLE_WS_STATS
-	thr->rbws->ws_flag = 0;
-	for(int i = 0; i < WS_STATS_SIZE; i++)
-		thr->rbws->ws_stats[i] = 0;
-	#endif
-	#endif
+	#endif // XTASK_RR_PSUH
 	return;
 };
 

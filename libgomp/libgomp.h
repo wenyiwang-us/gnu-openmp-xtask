@@ -73,9 +73,11 @@
 # pragma GCC visibility push(hidden)
 #endif
 #define GOMP_USE_XQUEUE 1
+#define XTASK_RR_PUSH 1 // random redirect push
 // #define GOMP_USE_XPERFLOG 1
-#define XTASK_RANDOM_BWS 1 // random batch workstealing
-#define XTASK_ENABLE_WS_STATS 1
+// #define XTASK_RANDOM_BWS 1 // random batch redirected workstealing
+// #define XTASK_ENABLE_WS_STATS 1
+// #define XTASK_RBWS 1 // random batch workstealing
 // #define XTASK_FULL_LOCAL_STEAL 1
 // #define XTASK_ENABLE_STATS 1
 // #define XTASK_STATS 1
@@ -814,6 +816,26 @@ struct gomp_team
 // XTASK_STATS data structure for each thread
 
 
+/** XTASK_RR_PUSH - xtask random redirect push */
+
+#ifdef XTASK_RR_PUSH
+#define N_VICTIMS 4
+#define N_REQ_CHECKS 4
+#define STEAL_DIVIDER 0 // now this means shift right 0 bits
+#define MAX_WAIT_COUNTDOWN 1000 // in loops
+#define REQ_Q_MASK(vthr) ((vthr)->rrpush->req_q_size - 1)
+#define CORES_PER_NZ 24 // number of cores per NUMA zone
+
+typedef struct rrpush{
+  uint64_t round;
+  uint64_t req;
+  int redirect_tid;
+  int nredirects;
+  int nre; // number of redirected push for current redirect
+} rrpush_t;
+#endif
+
+
 /**
  * XWS 
  * TODO: 
@@ -822,6 +844,15 @@ struct gomp_team
  *  Enlarge my_qsize to several times bigger, my_qsize = DEQUE_SIZE * n * m
  * 
 */
+
+// #define XTASK_RBWS
+// typedef struct rbws{
+//   uint64_t round;
+//   uint64_t req;
+// } rbws_t;
+
+// #endif
+
 
 #ifdef XTASK_RANDOM_BWS // random batch workstealing
 
@@ -1102,6 +1133,13 @@ struct gomp_thread
   xtask_stats_t xstats;
   
 #endif  // XTASK_STATS
+
+#ifdef XTASK_RR_PUSH
+
+  rrpush_t rrpush;
+
+#endif // XTASK_RR_PUSH
+
 #endif // GOMP_USE_XQUEUE
   /* This semaphore is used for ordered loops.  */
   gomp_sem_t release;
