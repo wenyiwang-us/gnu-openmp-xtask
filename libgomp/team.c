@@ -62,7 +62,7 @@ struct gomp_thread_start_data
   pthread_t handle;
 #ifdef GOMP_USE_XQUEUE
   bool use_xq;
-#ifdef XTASK_RANDOM_BWS
+#ifdef XTASK_RR_PUSH
   int nvictims;
   int nreq_checks;
   int steal_divider;
@@ -116,7 +116,7 @@ gomp_thread_start (void *xdata)
 
 #ifdef GOMP_USE_XQUEUE
 	thr->use_xq = data->use_xq;
-#ifdef XTASK_RANDOM_BWS
+#ifdef XTASK_RR_PUSH
 	if(thr->use_xq){
 		thr->nvictims = data->nvictims;
 		thr->nreq_checks = data->nreq_checks;
@@ -384,12 +384,12 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	gomp_num_task_queues = nthreads;
 
 	xtask_debug(0, 0, "XTASK v.1.5, nthreads=%d, use_xq=%d, nested=%d, level=%d.", nthreads, thr->use_xq, nested, thr->ts.level);
-#ifdef XTASK_RANDOM_BWS
+#ifdef XTASK_RR_PUSH
 if(thr->use_xq){
 	ws_get_env_vars();
-	xtask_debug(0, 0, "XTASK_RandomBWS: N_VICTIMS=%d, N_REQ_CHECKS=%d, STEAL_DIVIDER=%d, MAX_WAIT_COUNTDOWN=%d, CORES_PER_NZ=%d\n", thr->nvictims, thr->nreq_checks, thr->steal_divider, thr->max_wait_countdown, thr->cores_per_nz);
+	xtask_debug(0, 0, "XTASK-Redirect-Push: N_VICTIMS=%d, N_REQ_CHECKS=%d, STEAL_DIVIDER=%d, MAX_WAIT_COUNTDOWN=%d, CORES_PER_NZ=%d\n", thr->nvictims, thr->nreq_checks, thr->steal_divider, thr->max_wait_countdown, thr->cores_per_nz);
 }
-#endif // XTASK_RANDOM_BWS
+#endif // XTASK_RR_PUSH
 if(thr->use_xq && thr->td_task_q == NULL)
 	gomp_alloc_task_q(thr);
 
@@ -834,7 +834,7 @@ if(thr->use_xq && thr->td_task_q == NULL)
       start_data->ts.place_partition_off = thr->ts.place_partition_off;
       start_data->ts.place_partition_len = thr->ts.place_partition_len;
       start_data->place = 0;
-#if defined(GOMP_USE_XQUEUE) && defined(XTASK_RANDOM_BWS)
+#if defined(GOMP_USE_XQUEUE) && defined(XTASK_RR_PUSH)
 	  start_data->nvictims = thr->nvictims;
 	  start_data->nreq_checks = thr->nreq_checks;
 	  start_data->steal_divider = thr->steal_divider;

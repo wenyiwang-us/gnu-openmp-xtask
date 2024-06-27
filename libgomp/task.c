@@ -124,7 +124,7 @@ void xstats_dump(struct gomp_thread *thr){
 #endif
 
 
-#ifdef XTASK_RANDOM_BWS
+#ifdef XTASK_RR_PUSH
 #include <stdio.h>
 #include <time.h>
 void ws_get_env_vars(){
@@ -180,19 +180,19 @@ void ws_get_env_vars(){
 
 }
 
+
 static inline void send_reqs(){
 	struct gomp_thread *thr = gomp_thread();
 	int nthreads = thr->ts.team->nthreads;
 	int nvictims = thr->nvictims;
+	unsigned nz_leader = thr->nz_leader;
 	// unsigned vtid, vqid;
 	unsigned vtid;
 	unsigned mytid = thr->ts.team_id;
-	unsigned nz_leader = thr->nz_leader;
-	#ifdef XTASK_ENABLE_STATS
+	#ifdef XTASK_ENABLE_WS_STATS
 	unsigned long long stats_nreqs_sent = 0;
 	unsigned long long stats_nreqs = (unsigned long long) nvictims;
-	#endif // XTASK_ENABLE_STATS
-
+	#endif // XTASK_ENABLE_WS_STATS
 	for(int i = 0; i < nvictims; i++){
 		unsigned prob = myrand() & 0xFF;
 		while((vtid = myrand() % nthreads) == mytid);
@@ -201,44 +201,30 @@ static inline void send_reqs(){
 			vtid = vtid % thr->cores_per_nz;
 			vtid = nz_leader + vtid;
 		}
-		
-		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
-		struct rbws *vrbws = vthr->rbws;
 
-		if(WS_REQ2ROUND(vrbws->req) < vrbws->round){
-			vrbws->req = WS_TID2REQ(thr->ts.team_id) | vrbws->round;
-			#ifdef XTASK_ENABLE_WS_STATS
-			vrbws->ws_stats[WS_REQ_SEND_SUCCESS] ++;
-			#endif
+		// while((vtid = myrand() % nthreads) == mytid);
+		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
+		rrpush_t *vrrpush = &vthr->rrpush;
+
+		if(WS_REQ2ROUND(vrrpush->req) < vrrpush->round){
+			vrrpush->req = WS_TID2REQ(thr->ts.team_id) | vrrpush->round;
 			continue;
 		}
-		#ifdef XTASK_ENABLE_WS_STATS
-		vrbws->ws_stats[WS_REQ_SEND_FAILED] ++;
-		#endif
 	}
 }
 
 static inline void handle_reqs(unsigned long *last_req_q){
 	struct gomp_thread *thr = gomp_thread();
-	struct rbws *rbws = thr->rbws;
-	if(rbws->round == WS_REQ2ROUND(rbws->req)){
-		// push tasks to thief
-		rbws->redirect_tid = WS_REQ2TID(rbws->req);
-		// rbws->redirect_tid = -1;
-		rbws->nre = 0;
-
-		#ifdef XTASK_ENABLE_WS_STATS
-		rbws->ws_stats[WS_REQ_HANDLE_SUCCESS] ++;
-		#endif
-	}else{
-		#ifdef XTASK_ENABLE_WS_STATS
-		rbws->ws_stats[WS_REQ_HANDLE_FAILED] ++;
-		#endif
-		rbws->redirect_tid = -1;
+	rrpush_t *rrpush = &thr->rrpush;
+	if(rrpush->flag == RR_IDLE && rrpush->redirect_tid == -1 && rrpush->round == WS_REQ2ROUND(rrpush->req)){
+		// We now push to the thief if we before are not redirecting any tasks.
+		rrpush->redirect_tid = WS_REQ2TID(rrpush->req);
+		rrpush->nre = 0;
+		rrpush->flag = RR_HANDLING_REQ;
 	}
 }
 
-#endif // XTASK_RANDOM_BWS
+#endif // XTASK_RR_PUSH
 
 
 #ifdef XTASK_STATS
@@ -288,39 +274,35 @@ static void xstats_dump(){
 
 #ifdef XTASK_RR_PUSH
 
-static inline void send_reqs(){
-	struct gomp_thread *thr = gomp_thread();
-	int nthreads = thr->ts.team->nthreads;
-	int nvictims = thr->nvictims;
-	// unsigned vtid, vqid;
-	unsigned vtid;
-	unsigned mytid = thr->ts.team_id;
-	#ifdef XTASK_ENABLE_WS_STATS
-	unsigned long long stats_nreqs_sent = 0;
-	unsigned long long stats_nreqs = (unsigned long long) nvictims;
-	#endif // XTASK_ENABLE_WS_STATS
-	for(int i = 0; i < nvictims; i++){
-		while((vtid = myrand() % nthreads) == mytid);
-		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
-		rrpush_t *vrrpush = vthr->rrpush;
+#ifdef XTASK_RR_STATS
+static void rrdump(){
+	struct gomp_thread *thr= gomp_thread();
+	// print per thread information
 
-		if(WS_REQ2ROUND(vrrpush->req) < vrrpush->round){
-			vrrpush->req = WS_TID2REQ(thr->ts.team_id) | vrrpush->round;
-			continue;
+	// xtask_debug(0, 0, "round=%ld.", thr->rrpush.round);
+
+
+	if (thr->ts.team_id != 0)
+		return;
+	unsigned long long rrstats[RR_STATS_SIZE];
+	for(int i = 0; i < RR_STATS_SIZE; i++)
+		rrstats[i] = 0;
+	for(int i = 0; i < thr->ts.team->nthreads; i++){
+		rrpush_t *rrpush = &thr->thread_pool->threads[i]->rrpush;
+		for(int j = 0; j < RR_STATS_SIZE; j++){
+			rrstats[j] += rrpush->rrstats.stats[j];
 		}
 	}
+	xtask_debug(0, 0, "RR_STATS: normal_push_success=%llu, normal_push_failed=%llu, redirected_push_success=%llu, redirected_push_failed=%llu, redirect_local_push=%llu, redirect_remote_push=%llu",
+	rrstats[RR_NORMAL_PUSH_SUCCESS],
+	rrstats[RR_NORMAL_PUSH_FAILED],
+	rrstats[RR_REDIRECTED_PUSH_SUCCESS],
+	rrstats[RR_REDIRECTED_PUSH_FAILED],
+	rrstats[RR_REDIRECT_LOCAL_PUSH],
+	rrstats[RR_REDIRECT_REMOTE_PUSH]
+	);
 }
-
-static inline void handle_reqs(unsigned long *last_req_q){
-	struct gomp_thread *thr = gomp_thread();
-	rrpush_t *rrpush = thr->rrpush;
-	if(rrpush->redirect_tid == -1 && rrpush->round == WS_REQ2ROUND(rrpush->req)){
-		// push tasks to thief
-		rrpush->redirect_tid = WS_REQ2TID(rrpush->req);
-		rrpush->nre = 0;
-	}
-
-}
+#endif
 #endif
 
 void
@@ -375,16 +357,18 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 			}
 	}
 	#ifdef XTASK_RR_PUSH
-	thr->rrpush = (rrpush_t *)gomp_malloc(sizeof(rrpush_t));
-	thr->rrpush->round = 1;
-	thr->rrpush->req = 0;
+	// thr->rrpush = (rrpush_t *)gomp_malloc(sizeof(rrpush_t));
+	thr->rrpush.round = 1;
+	thr->rrpush.req = 0;
 	// thr->rbws->req_q_size = INITIAL_TASK_DEQUE_SIZE;
 	// thr->rbws->req_head = 0;
 	// thr->rbws->req_tail = 0;
-	thr->rrpush->nre = 0;
-	thr->rrpush->redirect_tid = -1;
-	thr->rrpush->nredirects = INITIAL_TASK_DEQUE_SIZE >> thr->steal_divider;
+	thr->rrpush.nre = 0;
+	thr->rrpush.redirect_tid = -1;
+	thr->rrpush.nredirects = INITIAL_TASK_DEQUE_SIZE >> thr->steal_divider;
 	thr->nz_leader = thr->ts.team_id / thr->cores_per_nz * thr->cores_per_nz;
+	for(int i = 0; i < RR_STATS_SIZE; i++)
+		thr->rrpush.rrstats.stats[i] = 0;
 	#endif // XTASK_RR_PSUH
 	return;
 };
@@ -403,11 +387,12 @@ gomp_push_task(struct gomp_task *task){
 
 	unsigned long target_tid; // starting target tid
 
-	#ifdef XTASK_RANDOM_BWS
-	struct rbws *rbws = thr->rbws;
+	#ifdef XTASK_RR_PUSH
+
+	rrpush_t *rrpush = &thr->rrpush;
 	bool target_full = false;
-	
-	if(rbws->redirect_tid == -1){
+	bool redirect = false;
+
 	#endif
 
 		target_tid = gtid + last_q;
@@ -416,86 +401,85 @@ gomp_push_task(struct gomp_task *task){
 		if (team->nthreads <= 1)
 			target_thr = thr;
 		else
-			target_thr = thr->thread_pool->threads[target_tid]; //ww: does this pointer the same across threads? - seems so
+			target_thr = thr->thread_pool->threads[target_tid];
 
 		while (target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
 			num_tries++;
 			if (num_tries < 25)
 				continue;
-			#ifdef XTASK_ENABLE_WS_STATS
-			if(rbws->ws_flag == WS_REDIRECT_NORMAL_PUSH_SUCCESS){
-				rbws->ws_flag = 0;
-				rbws->ws_stats[WS_REDIRECT_NORMAL_PUSH_FAILED]++;
-			}else{
-				rbws->ws_stats[WS_NORMAL_PUSH_FAILED]++;
+			/** New Strat: Only do load balancing when target queue full*/
+
+			#ifdef XTASK_RR_PUSH
+			// redirect tasks to the target_tid
+			if(rrpush->redirect_tid != -1 && rrpush->flag == RR_HANDLING_REQ){
+				num_tries = 0;
+				target_tid = (unsigned long) rrpush->redirect_tid;
+				last_q = target_tid < gtid ? target_tid - gtid + team->nthreads : target_tid - gtid;
+				if (team->nthreads <= 1)
+					target_thr = thr;
+				else
+					target_thr = thr->thread_pool->threads[target_tid];
+
+				rrpush->nre++;
+				redirect = true;
+				// xtask_debug(0, 0, "redirecting task to %lu, round=%ld, nre=%d, nredirects=%d", target_tid, rrpush->round, rrpush->nre, rrpush->nredirects);
+
+				while(target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
+					num_tries++;
+					if (num_tries < 25)
+						continue;
+					target_full = true;
+					// Redirect to a full queue, then current request should be updated
+					// return TASK_NOT_PUSHED;
+					break;
+				}
+				if(rrpush->nre > rrpush->nredirects || target_full){
+					rrpush->nre = 0;
+					rrpush->redirect_tid = -1;
+					rrpush->round++;
+					rrpush->flag = RR_IDLE;
+					rrpush->rrstats.stats[RR_REDIRECTED_PUSH_FAILED]++;
+					return TASK_NOT_PUSHED;
+				}
 			}
 			#endif
-
-			#ifdef XTASK_STATS
-			thr->xstats.stats[XTASK_STATS_NOT_PUSHED]++;
+			
+			#ifdef XTASK_RR_STATS
+			rrpush->rrstats.stats[RR_NORMAL_PUSH_FAILED]++;
 			#endif
+
 			return TASK_NOT_PUSHED;
 		}
-		#ifdef XTASK_ENABLE_WS_STATS
-		if(rbws->ws_flag == WS_REDIRECT_NORMAL_PUSH_SUCCESS){
-			rbws->ws_flag = 0;
-			rbws->ws_stats[WS_REDIRECT_NORMAL_PUSH_SUCCESS]++;
-		}else{
-			rbws->ws_stats[WS_NORMAL_PUSH_SUCCESS]++;
-		}
-		#endif
-	
-		#ifdef XTASK_STATS
-		thr->xstats.stats[XTASK_STATS_PUSHED]++;
-		#endif
 
-	#ifdef XTASK_RANDOM_BWS
-	}else{
-		// redirect tasks to the target_tid
-		
-		target_tid =(unsigned long) rbws->redirect_tid;
-		last_q = target_tid < gtid ? target_tid - gtid + team->nthreads : target_tid - gtid;
-		rbws->nre++;
-		if (team->nthreads <= 1)
-			target_thr = thr;
-		else
-			target_thr = thr->thread_pool->threads[target_tid]; //ww: does this pointer the same across threads? - seems so
 
-		while (target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
-			num_tries++;
-			if (num_tries < 25)
-				continue;
-			target_full = true;
-			break;
-		}
 
-		if(rbws->nre > rbws->nredirects || target_full){
-			rbws->nre = 0;
-			rbws->redirect_tid = -1;
-			rbws->round++;
-			#ifdef XTASK_ENABLE_WS_STATS
-			rbws->ws_flag = WS_REDIRECT_NORMAL_PUSH_SUCCESS;
-			rbws->ws_stats[WS_REQ_PROCESSED]++;
-			#endif
-			// now everything is set to default mode, try again.
-			// return TASK_NOT_PUSHED;
-			return gomp_push_task(task);
-		}
-		#ifdef XTASK_ENABLE_WS_STATS
-		rbws->ws_stats[WS_REDIRECT_PUSH_SUCCESS] ++;
-		#endif
-
-	}
-	#endif
+	// arriving here means we can push to the target q
 	struct gomp_taskq *task_q = target_thr->td_task_q[last_q];
 	task_q->nin++; // Will it be reordered by compilers or CPU?. it doesn't matter
 	task_q->td_deque[task_q->td_deque_head] = task;
 	task_q->td_deque_head = (task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
 	target_thr->last_q_accessed = last_q;
 
-	#ifdef XTASK_RANDOM_BWS
+	#ifdef XTASK_RR_PUSH
 	// only change the last_q when it is not in the process of redirecting tasks
-	if(rbws->redirect_tid == -1){
+	
+	#ifdef XTASK_RR_STATS
+	if ((!redirect)){
+		rrpush->rrstats.stats[RR_NORMAL_PUSH_SUCCESS]++;
+	}else{
+				if(target_tid / 24 == gtid / 24)
+					rrpush->rrstats.stats[RR_REDIRECT_LOCAL_PUSH]++;
+				else{
+					// xtask_debug(0, 0, "target_tid, gtid, redirect_tid=%lu, %lu, %d", target_tid, gtid, rrpush->redirect_tid);
+					rrpush->rrstats.stats[RR_REDIRECT_REMOTE_PUSH]++;	
+				}
+					
+			rrpush->rrstats.stats[RR_REDIRECTED_PUSH_SUCCESS]++;		
+	}
+		
+	#endif
+
+	if(rrpush->redirect_tid == -1){
 	#endif
 
 		if (thr->num_queues > 1){
@@ -506,7 +490,7 @@ gomp_push_task(struct gomp_task *task){
 				thr->last_q = 0;
 		}
 
-	#ifdef XTASK_RANDOM_BWS
+	#ifdef XTASK_RR_PUSH
 	}
 	#endif
 
@@ -942,6 +926,11 @@ void xomp_perflog_dump(void){
 		xtask_debug(0, 0, "[XPERFLOG] DUMP: XPERFLOG is not enabled.\n\n\n\n");
 	}
 	#endif // GOMP_USE_XPERFLOG
+
+	#if defined(XTASK_RR_PUSH) || defined(XTASK_RR_STATS)
+
+	rrdump();
+	#endif
 
 
 	#if defined(XTASK_STATS) || defined(XTASK_ENABLE_WS_STATS)
@@ -2368,7 +2357,7 @@ void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
 	unsigned long gtid = (unsigned long)omp_get_thread_num();
 	unsigned int use_own_tasks = 1, new_victim = 0;
 	unsigned long last_qid = (thr->num_queues <= gtid) ? 1 : gtid;
-	#ifdef XTASK_RANDOM_BWS
+	#ifdef XTASK_RR_PUSH
 	unsigned long last_req_qid = last_qid;
 	int wait_countdown = 0;
 	int max_wait_countdown = thr->max_wait_countdown;
@@ -2404,9 +2393,9 @@ while(1){
 			xtask_handle_req(&last_qid);
 			#endif // XTASK_SWS
 
-			#ifdef XTASK_RANDOM_BWS
+			#ifdef XTASK_RR_PUSH
 			handle_reqs(&last_req_qid);
-			#endif // XTASK_RANDOM_BWS
+			#endif // XTASK_RR_PUSH
 
 			#ifdef GOMP_USE_XPERFLOG
 			xperflog_record(XPERF_STALL_END | XPERF_BAR, bar_fref, bar_fref);
@@ -2425,7 +2414,7 @@ while(1){
 			xtask_steal_req();
 			#endif
 
-			#ifdef XTASK_RANDOM_BWS
+			#ifdef XTASK_RR_PUSH
 			if(wait_countdown > 0){
 				wait_countdown--;
 			}else{
@@ -2712,7 +2701,7 @@ GOMP_taskwait (void)
 	unsigned long gtid = (unsigned long)omp_get_thread_num();
 	unsigned int use_own_tasks = 1, new_victim = 0;
 	unsigned long last_qid = (thr->num_queues <= gtid) ? 1 : gtid;
-	#ifdef XTASK_RANDOM_BWS
+	#ifdef XTASK_RR_PUSH
 	unsigned long last_req_qid = last_qid;
 	int wait_countdown = 0;
 	int max_wait_countdown = thr->max_wait_countdown;
@@ -2751,7 +2740,7 @@ GOMP_taskwait (void)
 				xtask_steal_req();
 				#endif
 
-				#ifdef XTASK_RANDOM_BWS
+				#ifdef XTASK_RR_PUSH
 				if(wait_countdown > 0){
 					wait_countdown--;
 				}else{
@@ -2771,7 +2760,7 @@ GOMP_taskwait (void)
 				xtask_handle_req(&last_qid);
 				#endif
 
-				#ifdef XTASK_RANDOM_BWS
+				#ifdef XTASK_RR_PUSH
 				handle_reqs(&last_req_qid);
 				#endif
 			}

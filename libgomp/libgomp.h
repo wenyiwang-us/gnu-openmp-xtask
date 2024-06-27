@@ -74,11 +74,12 @@
 #endif
 #define GOMP_USE_XQUEUE 1
 #define XTASK_RR_PUSH 1 // random redirect push
+#define XTASK_RR_STATS 1 // random redirect stats
 // #define GOMP_USE_XPERFLOG 1
 // #define XTASK_RANDOM_BWS 1 // random batch redirected workstealing
 // #define XTASK_ENABLE_WS_STATS 1
 // #define XTASK_RBWS 1 // random batch workstealing
-// #define XTASK_FULL_LOCAL_STEAL 1
+#define XTASK_FULL_LOCAL_STEAL 1
 // #define XTASK_ENABLE_STATS 1
 // #define XTASK_STATS 1
 
@@ -825,6 +826,37 @@ struct gomp_team
 #define MAX_WAIT_COUNTDOWN 1000 // in loops
 #define REQ_Q_MASK(vthr) ((vthr)->rrpush->req_q_size - 1)
 #define CORES_PER_NZ 24 // number of cores per NUMA zone
+#ifdef XTASK_FULL_LOCAL_STEAL
+
+#define LOCAL_STEAL_PROB 256
+
+#else
+
+#define LOCAL_STEAL_PROB 200 // probability of local steal
+
+#endif
+
+#ifdef XTASK_RR_STATS
+
+typedef enum rrstats_type{
+  RR_NORMAL_PUSH_SUCCESS,
+  RR_NORMAL_PUSH_FAILED,
+  RR_REDIRECTED_PUSH_SUCCESS,
+  RR_REDIRECT_LOCAL_PUSH,
+  RR_REDIRECT_REMOTE_PUSH,
+  RR_REDIRECTED_PUSH_FAILED,
+  RR_STATS_SIZE
+} rrstats_type_t;
+
+typedef struct rrstats{
+  unsigned long long stats[RR_STATS_SIZE];
+} rrstats_t;
+
+#endif
+typedef enum rrflag{
+  RR_IDLE = 0,
+  RR_HANDLING_REQ = 1,
+} rrflag_t;
 
 typedef struct rrpush{
   uint64_t round;
@@ -832,6 +864,10 @@ typedef struct rrpush{
   int redirect_tid;
   int nredirects;
   int nre; // number of redirected push for current redirect
+  int flag;
+  #ifdef XTASK_RR_STATS
+  rrstats_t rrstats;
+  #endif
 } rrpush_t;
 #endif
 
@@ -1106,7 +1142,7 @@ struct gomp_thread
   rws_t rws;
 #endif // XTASK_RANDOM_WS
 
-#ifdef XTASK_RANDOM_BWS
+#ifdef XTASK_RR_PUSH
 
   int nvictims;
   int nreq_checks;
@@ -1137,7 +1173,6 @@ struct gomp_thread
 #ifdef XTASK_RR_PUSH
 
   rrpush_t rrpush;
-
 #endif // XTASK_RR_PUSH
 
 #endif // GOMP_USE_XQUEUE
@@ -1384,7 +1419,7 @@ extern void xflag_init(struct gomp_thread *thr);
 extern void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs);
 // extern void xflag_build_tree(struct xflag *, int, int);
 // extern void xflag_optimize_tree(struct xflag *);
-#ifdef XTASK_RANDOM_BWS
+#ifdef XTASK_RR_PUSH
 extern void ws_get_env_vars();
 #endif
 
