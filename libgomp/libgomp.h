@@ -75,11 +75,11 @@
 #define GOMP_USE_XQUEUE 1
 #define XTASK_RR_PUSH 1 // random redirect push
 #define XTASK_RR_STATS 1 // random redirect stats
-// #define GOMP_USE_XPERFLOG 1
+#define GOMP_USE_XPERFLOG 1
 // #define XTASK_RANDOM_BWS 1 // random batch redirected workstealing
 // #define XTASK_ENABLE_WS_STATS 1
 // #define XTASK_RBWS 1 // random batch workstealing
-#define XTASK_FULL_LOCAL_STEAL 1
+// #define XTASK_FULL_LOCAL_STEAL 1
 // #define XTASK_ENABLE_STATS 1
 // #define XTASK_STATS 1
 
@@ -832,7 +832,7 @@ struct gomp_team
 
 #else
 
-#define LOCAL_STEAL_PROB 200 // probability of local steal
+#define LOCAL_STEAL_PROB 50 // probability of local steal
 
 #endif
 

@@ -221,6 +221,8 @@ static inline void handle_reqs(unsigned long *last_req_q){
 		rrpush->redirect_tid = WS_REQ2TID(rrpush->req);
 		rrpush->nre = 0;
 		rrpush->flag = RR_HANDLING_REQ;
+	}else{
+		rrpush->round ++;
 	}
 }
 
@@ -393,6 +395,7 @@ gomp_push_task(struct gomp_task *task){
 	bool target_full = false;
 	bool redirect = false;
 
+	if(rrpush->flag == RR_IDLE){
 	#endif
 
 		target_tid = gtid + last_q;
@@ -409,48 +412,46 @@ gomp_push_task(struct gomp_task *task){
 				continue;
 			/** New Strat: Only do load balancing when target queue full*/
 
-			#ifdef XTASK_RR_PUSH
-			// redirect tasks to the target_tid
-			if(rrpush->redirect_tid != -1 && rrpush->flag == RR_HANDLING_REQ){
-				num_tries = 0;
-				target_tid = (unsigned long) rrpush->redirect_tid;
-				last_q = target_tid < gtid ? target_tid - gtid + team->nthreads : target_tid - gtid;
-				if (team->nthreads <= 1)
-					target_thr = thr;
-				else
-					target_thr = thr->thread_pool->threads[target_tid];
-
-				rrpush->nre++;
-				redirect = true;
-				// xtask_debug(0, 0, "redirecting task to %lu, round=%ld, nre=%d, nredirects=%d", target_tid, rrpush->round, rrpush->nre, rrpush->nredirects);
-
-				while(target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
-					num_tries++;
-					if (num_tries < 25)
-						continue;
-					target_full = true;
-					// Redirect to a full queue, then current request should be updated
-					// return TASK_NOT_PUSHED;
-					break;
-				}
-				if(rrpush->nre > rrpush->nredirects || target_full){
-					rrpush->nre = 0;
-					rrpush->redirect_tid = -1;
-					rrpush->round++;
-					rrpush->flag = RR_IDLE;
-					rrpush->rrstats.stats[RR_REDIRECTED_PUSH_FAILED]++;
-					return TASK_NOT_PUSHED;
-				}
-			}
-			#endif
-			
-			#ifdef XTASK_RR_STATS
+			#if defined(XTASK_RR_STATS) && defined(XTASK_RR_PUSH)
 			rrpush->rrstats.stats[RR_NORMAL_PUSH_FAILED]++;
 			#endif
 
 			return TASK_NOT_PUSHED;
 		}
+	#ifdef XTASK_RR_PUSH
+	}else{
+		// now it is rr handling
+	
+		target_tid = (unsigned long) rrpush->redirect_tid;
+		last_q = target_tid < gtid ? target_tid - gtid + team->nthreads : target_tid - gtid;
+		if (team->nthreads <= 1)
+			target_thr = thr;
+		else
+			target_thr = thr->thread_pool->threads[target_tid];
 
+		rrpush->nre++;
+		redirect = true;
+		// xtask_debug(0, 0, "redirecting task to %lu, round=%ld, nre=%d, nredirects=%d", target_tid, rrpush->round, rrpush->nre, rrpush->nredirects);
+
+		while(target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
+			num_tries++;
+			if (num_tries < 25)
+				continue;
+			target_full = true;
+			// Redirect to a full queue, then current request should be updated
+			// return TASK_NOT_PUSHED;
+			break;
+		}
+		if(rrpush->nre > rrpush->nredirects || target_full){
+			rrpush->nre = 0;
+			rrpush->redirect_tid = -1;
+			rrpush->round++;
+			rrpush->flag = RR_IDLE;
+			rrpush->rrstats.stats[RR_REDIRECTED_PUSH_FAILED]++;
+			return TASK_NOT_PUSHED;
+		}
+	}
+	#endif // XTASK_RR_PUSH
 
 
 	// arriving here means we can push to the target q
@@ -927,7 +928,7 @@ void xomp_perflog_dump(void){
 	}
 	#endif // GOMP_USE_XPERFLOG
 
-	#if defined(XTASK_RR_PUSH) || defined(XTASK_RR_STATS)
+	#if defined(XTASK_RR_PUSH) && defined(XTASK_RR_STATS)
 
 	rrdump();
 	#endif
@@ -3865,4 +3866,6 @@ omp_fulfill_event (omp_event_handle_t event)
 }
 
 ialias (omp_fulfill_event)
+#ifdef GOMP_USE_XQUEUE
 ialias (xomp_perflog_info)
+#endif
