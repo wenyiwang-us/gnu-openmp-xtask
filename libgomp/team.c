@@ -111,6 +111,11 @@ gomp_thread_start (void *xdata)
 	thr->use_xq = data->use_xq;
 	if(thr->use_xq && thr->td_task_q == NULL)
 	  	gomp_alloc_task_q(thr);
+
+#ifdef XTASK_RWS
+if(thr->use_xq)
+	xtask_get_env();
+#endif
 #ifdef GOMP_USE_XPERFLOG
 	xperflog_init();
 #endif // GOMP_USE_XPERFLOG
@@ -364,7 +369,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	// team->use_xq = true; // default to true
 	// thr->use_xq = flags & 32;
 	thr->use_xq = 1;
-	xtask_debug(0, 0, "XTASK v.1.4, nthreads=%d, use_xq=%d, nested=%d, level=%d.", nthreads, thr->use_xq, nested, thr->ts.level);
+	xtask_debug(0, 0, "XTASK v.1.6, nthreads=%d, use_xq=%d, nested=%d, level=%d.", nthreads, thr->use_xq, nested, thr->ts.level);
   	gomp_num_task_queues = nthreads;
   	gomp_alloc_task_q(thr);
 #ifdef GOMP_USE_XPERFLOG
@@ -372,6 +377,9 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	GOMP_ATOMIC_ST_REL(&team->xperflog_awaited, nthreads);
 	xperflog_init();
 #endif // GOMP_USE_XPERFLOG
+
+
+
 #ifdef XTASK_SWS
 	xtask_debug(0, 0, "XTASK_SimpleWS enabled.\n");
 #endif
@@ -425,6 +433,12 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
     return;
 
   i = 1;
+#if defined(XTASK_RWS) && defined(GOMP_USE_XQUEUE)
+	if(thr->use_xq){
+		xtask_get_env();
+		xtask_debug(0, 0, "XTASK_RWS: N_VICTIMS=%d, NSTEALS=%d, NWAITS=%d, NCORES_NUMA=%d, LOCAL_PROB=%d.", thr->rws.nvictims, thr->rws.nsteals, thr->rws.nwaits, thr->rws.ncores_numa, thr->rws.prob);
+	}
+#endif
 
   if (__builtin_expect (gomp_places_list != NULL, 0))
     {

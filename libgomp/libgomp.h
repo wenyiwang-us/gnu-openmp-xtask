@@ -73,13 +73,11 @@
 # pragma GCC visibility push(hidden)
 #endif
 #define GOMP_USE_XQUEUE 1
-// #define GOMP_USE_XWS 1 // use xworkshares/workstealing
 // #define GOMP_USE_XPERFLOG 1
-// #define XTASK_LLWS 1
-// #define XTASK_SWS 1 // simple ws
-#define XTASK_RANDOM_WS 1
+#define XTASK_RWS 1 // random work stealing
+// #define XTASK_STATS 1
 
-// #define XTASK_WORKSHARE 1
+
 
 
 /* If we were a C++ library, we'd get this from <std/atomic>.  */
@@ -805,6 +803,14 @@ struct gomp_team
 #define TASK_DEQUE_MASK(td) ((td)->td_deque_size - 1)
 #define INITIAL_TASK_BITS 5
 #define INITIAL_TASK_DEQUE_SIZE (1 << INITIAL_TASK_BITS)
+
+// Simple lockless thread messageing mechanism, messages can be dropped.
+#define MSG_TID2REQ(a) ((uint64_t)(a) << 40) // convert tid to request
+#define MSG_REQ2ROUND(a) ((a) & (uint64_t)((1ULL << 40) - 1)) // convert request to round
+#define MSG_REQ2TID(a) ((unsigned int)((a) >> 40)) // convert request to tid
+
+
+
 /**
  * XWS 
  * TODO: 
@@ -977,6 +983,34 @@ typedef struct xws {
 
 #endif // XTASK_LLWS
 
+#ifdef XTASK_RWS // random workstealing
+
+
+
+#define NVICTIMS 4
+#define NSTEALS 8
+#define NWAITS 2000
+#define NCORES_NUMA 24
+#define LOCAL_STEAL_PROB 256
+
+struct rws{
+  uint64_t round;
+  uint64_t req;
+  int nvictims; // number of victims per req
+  int nsteals; // steal per request
+  int nwaits; // waiting loops
+  int ncores_numa; // number of cores per numa zone
+  int prob;
+  int leader; // leader
+
+  #ifdef XTASK_STATS
+  unsigned long long nstolen;
+  #endif
+};
+
+
+#endif // XTASK_RWS
+
 #ifdef GOMP_USE_XPERFLOG
 #define XPERFLOG_MAX_EVENTS 1<<27 // 128MB events
 // lets use bit 10 to indicate if the event is a sample event
@@ -1069,18 +1103,12 @@ struct gomp_thread
   unsigned long tl_task_queued_count;
   bool use_xq; // use xq or not, default is yes, when incompat clauses appeared, will use default GNU tasking implementation
   struct xflag xflag;
-#ifdef XTASK_LLWS
-  xws_t xws;
-#endif // XTASK_LLWS
 
-#ifdef XTASK_SWS
-  wsi_t wsi;
-#endif // XTASK_SWS
+#ifdef XTASK_RWS
 
-#ifdef XTASK_RANDOM_WS
-  rws_t rws;
-#endif // XTASK_RANDOM_WS
+  struct rws rws;
 
+#endif 
 
 #ifdef GOMP_USE_XPERFLOG
   struct xperflog xperflog;
@@ -1339,6 +1367,10 @@ extern void xperflog_dump(struct gomp_thread *);
 extern void xperflog_reset(struct gomp_thread *);
 extern void xperflog_dump_reset();
 #endif // GOMP_USE_XPERFLOG
+
+#ifdef XTASK_RWS
+extern void xtask_get_env();
+#endif
 
 #endif // GOMP_USE_XQUEUE
 /* team.c */
