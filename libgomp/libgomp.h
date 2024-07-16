@@ -75,9 +75,9 @@
 #define GOMP_USE_XQUEUE 1
 // #define GOMP_USE_XPERFLOG 1
 #define XTASK_RWS 1 // random work stealing
-// #define XTASK_STATS 1
 
-
+#define ENABLE_WSSTATS 1 // xtask performance statistics
+// #define ENABLE_PERFLOG 1 // xtask performance logging
 
 
 /* If we were a C++ library, we'd get this from <std/atomic>.  */
@@ -657,6 +657,9 @@ struct gomp_task
      are satisfied.  */
   bool parent_depends_on;
 #ifdef GOMP_USE_XQUEUE
+#ifdef ENABLE_WSSTATS
+  unsigned int src_tid; // source thread id that instantiated this task, for ws we are curious about its locality
+#endif
   unsigned long td_incomplete_child_tasks;
 #endif
   /* Dependencies provided and/or needed for this task.  DEPEND_COUNT
@@ -1067,10 +1070,34 @@ typedef struct xperflog {
   int generation;
   bool is_stalling; // is stalling
   // should flush then reinit after each team barrier
+
 } xperflog_t
 __attribute__((aligned(64)))
 ;
 #endif // GOMP_USE_XPERFLOG
+
+#ifdef ENABLE_WSSTATS
+// What do we want to measure?
+typedef enum wsstats_type{
+  // task related
+  WSSTATS_NTASK_PUSHED,
+  WSSTATS_NTASK_NOT_PUSHED,
+  // task locality related
+  WSSTATS_NTASK_EXEC_LOCAL,
+  WSSTATS_NTASK_EXEC_SELF,
+  WSSTATS_NTASK_EXEC_REMOTE,
+  // ws, req related
+  WSSTATS_NREQ_SENT,
+  WSSTATS_NREQ_HANDLED,
+  
+  // ws, task related
+  WSSTATS_NTASK_STOLEN_LOCAL,
+  WSSTATS_NTASK_STOLEN_REMOTE,
+  WSSTATS_SIZE,
+} wsstats_type_t;
+
+#endif
+
 #endif // GOMP_USE_XQUEUE
 
 /* This structure contains all data that is private to libgomp and is
@@ -1113,6 +1140,11 @@ struct gomp_thread
 #ifdef GOMP_USE_XPERFLOG
   struct xperflog xperflog;
 #endif // GOMP_USE_XPERFLOG
+
+#ifdef ENABLE_WSSTATS
+  unsigned long long wsstats[WSSTATS_SIZE];
+#endif
+
 #endif // GOMP_USE_XQUEUE
   /* This semaphore is used for ordered loops.  */
   gomp_sem_t release;
