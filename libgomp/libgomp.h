@@ -74,8 +74,8 @@
 #endif
 #define GOMP_USE_XQUEUE 1
 #define XTASK_RR_PUSH 1 // random redirect push
-#define XTASK_RR_STATS 1 // random redirect stats
-#define GOMP_USE_XPERFLOG 1
+// #define XTASK_RR_STATS 1 // random redirect stats
+// #define GOMP_USE_XPERFLOG 1
 // #define XTASK_RANDOM_BWS 1 // random batch redirected workstealing
 // #define XTASK_ENABLE_WS_STATS 1
 // #define XTASK_RBWS 1 // random batch workstealing
@@ -662,6 +662,11 @@ struct gomp_task
   bool parent_depends_on;
 #ifdef GOMP_USE_XQUEUE
   unsigned long td_incomplete_child_tasks;
+
+#if defined(XTASK_RR_PUSH) && defined(XTASK_RR_STATS)
+  unsigned int src_tid;
+#endif
+
 #endif
   /* Dependencies provided and/or needed for this task.  DEPEND_COUNT
      is the number of items available.  */
@@ -821,9 +826,8 @@ struct gomp_team
 
 #ifdef XTASK_RR_PUSH
 #define N_VICTIMS 4
-#define N_REQ_CHECKS 4
 #define STEAL_DIVIDER 0 // now this means shift right 0 bits
-#define MAX_WAIT_COUNTDOWN 1000 // in loops
+#define MAX_NWAITS 1000 // in loops
 #define REQ_Q_MASK(vthr) ((vthr)->rrpush->req_q_size - 1)
 #define CORES_PER_NZ 24 // number of cores per NUMA zone
 #ifdef XTASK_FULL_LOCAL_STEAL
@@ -845,6 +849,11 @@ typedef enum rrstats_type{
   RR_REDIRECT_LOCAL_PUSH,
   RR_REDIRECT_REMOTE_PUSH,
   RR_REDIRECTED_PUSH_FAILED,
+  RR_REQ_SENT,
+  RR_REQ_HANDLED,
+  RR_NTASK_EXEC_LOCAL,
+  RR_NTASK_EXEC_SELF,
+  RR_NTASK_EXEC_REMOTE,
   RR_STATS_SIZE
 } rrstats_type_t;
 
@@ -881,96 +890,6 @@ typedef struct rrpush{
  * 
 */
 
-// #define XTASK_RBWS
-// typedef struct rbws{
-//   uint64_t round;
-//   uint64_t req;
-// } rbws_t;
-
-// #endif
-
-
-#ifdef XTASK_RANDOM_BWS // random batch workstealing
-
-#define N_VICTIMS 4
-#define N_REQ_CHECKS 4
-#define STEAL_DIVIDER 0 // now this means shift right 0 bits
-#define MAX_WAIT_COUNTDOWN 1000 // in loops
-#define REQ_Q_MASK(vthr) ((vthr)->rbws->req_q_size - 1) 
-#define CORES_PER_NZ 24 // number of cores per NUMA zone
-
-#ifdef XTASK_FULL_LOCAL_STEAL
-
-#define LOCAL_STEAL_PROB 255
-
-#else
-
-#define LOCAL_STEAL_PROB 200 // probability of local steal
-
-#endif
-
-#ifdef XTASK_ENABLE_WS_STATS
-typedef enum xstats_type{
-  WS_REQ_SEND_SUCCESS,
-  WS_REQ_SEND_FAILED,
-  WS_REQ_HANDLE_SUCCESS,
-  WS_REQ_HANDLE_FAILED,
-  WS_REQ_PROCESSED,
-
-  WS_NORMAL_PUSH_SUCCESS,
-  WS_NORMAL_PUSH_FAILED,
-  WS_REDIRECT_PUSH_SUCCESS,
-  WS_REDIRECT_NORMAL_PUSH_SUCCESS,
-  WS_REDIRECT_NORMAL_PUSH_FAILED, // failed to do a normal push after redirect failed.
-  
-
-  WS_STATS_SIZE
-} xstats_type_t;
-
-enum rbwsflag{
-  RBWS_INIT_VAL = 0,
-  RBWS_STEALING = 1,
-  RBWS_REQ_RECEIVED = 2,
-};
-#endif // XTASK_ENABLE_WS_STATS
-#endif // XTASK_RANDOM_BWS
-
-
-enum xtask_stats_type{
-  XTASK_STATS_PUSHED,
-  XTASK_STATS_NOT_PUSHED,
-  XTASK_STATS_SIZE
-};
-
-typedef struct xtask_stats {
-  // tasks operations counters
-  unsigned long long stats[XTASK_STATS_SIZE];
-
-#if defined(XTASK_RANDOM_BWS) && defined(XTASK_ENBALE_WS_STATS)
-
-  int ws_flag;
-  unsigned long long ws_stats[WS_STATS_SIZE];
-
-#endif
-
-} xtask_stats_t;
-
-#ifdef XTASK_RANDOM_BWS
-
-struct rbws{
-  uint64_t round;
-  uint64_t req;
-  int redirect_tid;
-  int nredirects;
-  int nre; // number of redirected push for current redirect
-  #ifdef XTASK_ENABLE_WS_STATS
-  int ws_flag;
-  unsigned long long ws_stats[WS_STATS_SIZE];
-  #endif
-};
-#endif
-
-
 
 /* This structure contains task queue for xqueue implementation. */
 struct gomp_taskq{
@@ -1004,37 +923,6 @@ struct xflag{
   volatile int gathered;
 }
 __attribute__((aligned(64)));
-
-
-
-
-#ifdef XTASK_ENABLE_STATS 
-
-#define XSTATS_MAX_EVENTS 1<<26 // 64MB events
-typedef enum xstats_event{
-  XSTATS_NULL           = 0,
-  XSTATS_REQ_SENT       = 1,
-  XSTATS_REQ_HANDLED    = 2,
-  XSTATS_NO_REQ         = 3,
-} xstats_type_t;
-
-typedef struct xstats_data_cell{
-  unsigned long long ts;
-  xstats_type_t event;
-  unsigned long long v0; // value 0, in ws, it is the round number
-  unsigned long long v1; // value 1, in ws, it is the number of requests
-  unsigned long long v2;
-} xstats_data_cell_t;
-
-typedef struct xstats_data {
-  char fname[128]; // file name path
-  xstats_data_cell_t *sd; // stats data
-  unsigned long long edix; // index of the log
-} xstats_data_t;
-
-
-
-#endif // XTASK_ENABLE_STATS
 
 #ifdef GOMP_USE_XPERFLOG
 #define XPERFLOG_MAX_EVENTS 1<<27 // 128MB events
@@ -1087,7 +975,6 @@ typedef struct xperflog {
   long long ssum; // sample sum
   char *xperflog_path;
   char filename[64]; // log file name
-  char wsstats_fname[64];
   void *fp; // use void * instead of FILE * to avoid including stdio.h here
 
   int tid; // thread id
@@ -1145,11 +1032,11 @@ struct gomp_thread
 #ifdef XTASK_RR_PUSH
 
   int nvictims;
-  int nreq_checks;
+  int local_prob;
   int steal_divider;
   unsigned nz_leader;
-  int cores_per_nz;
-  int max_wait_countdown;
+  int ncores_numa;
+  int nwaits;
   unsigned long last_req_q_accessed;
   unsigned long last_req_q;
   struct rbws *rbws;
@@ -1420,7 +1307,7 @@ extern void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs);
 // extern void xflag_build_tree(struct xflag *, int, int);
 // extern void xflag_optimize_tree(struct xflag *);
 #ifdef XTASK_RR_PUSH
-extern void ws_get_env_vars();
+extern void rr_get_env_vars();
 #endif
 
 #ifdef GOMP_USE_XPERFLOG

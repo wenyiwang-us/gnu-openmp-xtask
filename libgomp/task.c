@@ -78,56 +78,11 @@ static int gomp_push_task(struct gomp_task *);
 static gomp_task_t* gomp_remove_my_task();
 static gomp_task_t* gomp_remove_aux_task(unsigned long *);
 
-#ifdef XTASK_ENABLE_STATS
-#include <stdio.h>
-void xstats_init(){
-	struct gomp_thread *thr = gomp_thread();
-	xstats_data_t *xd = &thr->xstats;
-	xd->edix = 0;
-	xd->sd = (xstats_data_cell_t *)gomp_malloc(sizeof(xstats_data_cell_t) * XSTATS_MAX_EVENTS);
-	char *fpath = getenv("XSTATS_PATH");
-	snprintf(xd->fname, 128, "%s/xstats_%d.csv", fpath, thr->ts.team_id);
-}
-
-void xstats_record(xstats_type_t event, unsigned long long v0, unsigned long long v1, unsigned long long v2){
-	struct gomp_thread *thr = gomp_thread();
-	if(thr->xstats.edix >= XSTATS_MAX_EVENTS){
-		xtask_debug(0, 1, "xstats buffer is full.");
-		return;
-	}
-	xstats_data_cell_t *sd = &thr->xstats.sd[thr->xstats.edix];
-	unsigned int aux;
-
-	sd->ts = __rdtscp(&aux);	
-	sd->event = event;
-	// different event has different meaning of v0, v1, v2
-	sd->v0 = v0; // 
-	sd->v1 = v1; // 
-	sd->v2 = v2; // 
-	thr->xstats.edix++;
-}
-
-void xstats_dump(struct gomp_thread *thr){
-	xstats_data_t *xd = &thr->xstats;
-	xstats_data_cell_t *sd = xd->sd;
-	FILE *fp = fopen(xd->fname, "w");
-	if(fp == NULL){
-		xtask_debug(0, 1, "failed to open file %s", xd->fname);
-		return;
-	}
-	fprintf(fp, "timestamp,event,v0,v1,v2");
-	for(unsigned long long i = 0; i < xd->edix; i++){
-		fprintf(fp, "\n%llu,%d,%llu,%llu,%llu", sd[i].ts, sd[i].event, sd[i].v0, sd[i].v1, sd[i].v2);
-	}
-	fclose(fp);
-}
-#endif
-
 
 #ifdef XTASK_RR_PUSH
 #include <stdio.h>
 #include <time.h>
-void ws_get_env_vars(){
+void rr_get_env_vars(){
 	struct gomp_thread *thr = gomp_thread();
 	g_seed = time(NULL);
 	
@@ -138,16 +93,14 @@ void ws_get_env_vars(){
 		xtask_debug(0, 0, "WARNING: N_VICTIMS is not set, using default value %d", N_VICTIMS);
 	}else{
 		thr->nvictims = atoi(env);
-		// xtask_debug(0, 0, "N_VICTIMS=%d", thr->nvictims);
 	}
 
-	env = getenv("N_REQ_CHECKS");
+	env = getenv("LOCAL_STEAL_PROB");
 	if(env == NULL){
-		thr->nreq_checks = N_REQ_CHECKS;
-		xtask_debug(0, 0, "WARNING: N_REQ_CHECKS is not set, using default value %d", N_REQ_CHECKS);
+		thr->local_prob = LOCAL_STEAL_PROB;
+		xtask_debug(0, 0, "WARNING: LOCAL_STEAL_PROB is not set, using default value %d", LOCAL_STEAL_PROB);
 	}else{
-		thr->nreq_checks = atoi(env);
-		// xtask_debug(0, 0, "N_REQ_CHECKS=%d", thr->nreq_checks);
+		thr->local_prob = atoi(env);
 	}
 
 	env = getenv("STEAL_DIVIDER");
@@ -156,26 +109,24 @@ void ws_get_env_vars(){
 		xtask_debug(0, 0, "WARNING: STEAL_DIVIDER is not set, using default value %d", STEAL_DIVIDER);
 	}else{
 		thr->steal_divider = atoi(env);
-		// xtask_debug(0, 0, "STEAL_DIVIDER=%d", thr->steal_divider);
 	}
 
-	env = getenv("MAX_WAIT_COUNTDOWN");
+	env = getenv("NWAITS");
 	if(env == NULL){
-		thr->max_wait_countdown = MAX_WAIT_COUNTDOWN;
-		xtask_debug(0, 0, "WARNING: MAX_WAIT_COUNTDOWN is not set, using default value %d", MAX_WAIT_COUNTDOWN);
+		thr->nwaits = MAX_NWAITS;
+		xtask_debug(0, 0, "WARNING: MAX_NWAITS is not set, using default value %d", MAX_NWAITS);
 	}else{
-		thr->max_wait_countdown = atoi(env);
-		// xtask_debug(0, 0, "MAX_WAIT_COUNTDOWN=%d", thr->max_wait_countdown);
+		thr->nwaits = atoi(env);
 	}
 
-	env = getenv("CORES_PER_NZ");
+	env = getenv("NCORES_NUMA");
 	if(env == NULL){
-		xtask_debug(0, 0, "CORES_PER_NZ is not set, using default value %d", CORES_PER_NZ);
-		thr->cores_per_nz = CORES_PER_NZ;
+		xtask_debug(0, 0, "NCORES_NUMA is not set, using default value %d", CORES_PER_NZ);
+		thr->ncores_numa = CORES_PER_NZ;
 	}else{
-		int cores_per_nz = atoi(env);
-		thr->cores_per_nz = cores_per_nz;
-		
+		int ncores_numa = atoi(env);
+		thr->ncores_numa = ncores_numa;
+		xtask_debug(0, 0, "CORES_PER_NZ is set to %d", ncores_numa);
 	}
 
 }
@@ -186,32 +137,33 @@ static inline void send_reqs(){
 	int nthreads = thr->ts.team->nthreads;
 	int nvictims = thr->nvictims;
 	unsigned nz_leader = thr->nz_leader;
-	// unsigned vtid, vqid;
 	unsigned vtid;
 	unsigned mytid = thr->ts.team_id;
-	#ifdef XTASK_ENABLE_WS_STATS
-	unsigned long long stats_nreqs_sent = 0;
-	unsigned long long stats_nreqs = (unsigned long long) nvictims;
-	#endif // XTASK_ENABLE_WS_STATS
+	unsigned local_prob = thr->local_prob;
+	#ifdef XTASK_RR_STATS
+	rrpush_t *rrpush = &thr->rrpush;
+	#endif
 	for(int i = 0; i < nvictims; i++){
 		unsigned prob = myrand() & 0xFF;
 		while((vtid = myrand() % nthreads) == mytid);
-		if(prob < LOCAL_STEAL_PROB){
-			// local steal, vtid = thr->nz_leader
-			vtid = vtid % thr->cores_per_nz;
+		if(prob < local_prob){
+			vtid = vtid % thr->ncores_numa;
 			vtid = nz_leader + vtid;
 		}
 
-		// while((vtid = myrand() % nthreads) == mytid);
 		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
 		rrpush_t *vrrpush = &vthr->rrpush;
 
 		if(WS_REQ2ROUND(vrrpush->req) < vrrpush->round){
 			vrrpush->req = WS_TID2REQ(thr->ts.team_id) | vrrpush->round;
+			#ifdef XTASK_RR_STATS
+			rrpush->rrstats.stats[RR_REQ_SENT]++;
+			#endif
 			continue;
 		}
 	}
 }
+
 
 static inline void handle_reqs(unsigned long *last_req_q){
 	struct gomp_thread *thr = gomp_thread();
@@ -221,69 +173,18 @@ static inline void handle_reqs(unsigned long *last_req_q){
 		rrpush->redirect_tid = WS_REQ2TID(rrpush->req);
 		rrpush->nre = 0;
 		rrpush->flag = RR_HANDLING_REQ;
+		#ifdef XTASK_RR_STATS
+		rrpush->rrstats.stats[RR_REQ_HANDLED]++;
+		#endif
 	}else{
 		rrpush->round ++;
 	}
 }
 
-#endif // XTASK_RR_PUSH
-
-
-#ifdef XTASK_STATS
-
-static void xstats_dump(){
-	struct gomp_thread *thr = gomp_thread();
-	if(thr->ts.team_id != 0)
-		return;
-
-	unsigned long long ntasks_pushed = 0;
-	unsigned long long ntasks_not_pushed = 0;
-	for(int i = 0; i < thr->ts.team->nthreads; i++){
-		ntasks_pushed += thr->thread_pool->threads[i]->xstats.stats[XTASK_STATS_PUSHED];
-		ntasks_not_pushed += thr->thread_pool->threads[i]->xstats.stats[XTASK_STATS_NOT_PUSHED];
-	}
-	xtask_debug(0, 0, "ntasks_pushed=%llu, ntasks_not_pushed=%llu", ntasks_pushed, ntasks_not_pushed);
-}
-#endif // XTASK_STATS
-
-#ifdef XTASK_ENABLE_WS_STATS
-static void xstats_dump(){
-	struct gomp_thread *thr = gomp_thread();
-	if(thr->ts.team_id != 0)
-		return;
-	
-	unsigned long long xstats[WS_STATS_SIZE];
-	for(int i = 0; i < WS_STATS_SIZE; i++)
-		xstats[i] = 0;
-
-	for(int i = 0; i < thr->ts.team->nthreads; i++){
-		struct rbws *rbws = thr->thread_pool->threads[i]->rbws;
-		for(int j = 0; j < WS_STATS_SIZE; j++){
-			xstats[j] += rbws->ws_stats[j];
-		}
-	}
-
-	xtask_debug(0, 0, "WS_STATS: normal_push_success=%llu, normal_push_failed=%llu, redirect_push_success=%llu, redirect_normal_push_failed=%llu, redirect_normal_push_success=%llu.",
-	xstats[WS_NORMAL_PUSH_SUCCESS],
-	xstats[WS_NORMAL_PUSH_FAILED],
-	xstats[WS_REDIRECT_PUSH_SUCCESS],
-	xstats[WS_REDIRECT_NORMAL_PUSH_FAILED],
-	xstats[WS_REDIRECT_NORMAL_PUSH_SUCCESS]
-	);
-}
-#endif
-
-
-#ifdef XTASK_RR_PUSH
 
 #ifdef XTASK_RR_STATS
 static void rrdump(){
 	struct gomp_thread *thr= gomp_thread();
-	// print per thread information
-
-	// xtask_debug(0, 0, "round=%ld.", thr->rrpush.round);
-
-
 	if (thr->ts.team_id != 0)
 		return;
 	unsigned long long rrstats[RR_STATS_SIZE];
@@ -295,13 +196,29 @@ static void rrdump(){
 			rrstats[j] += rrpush->rrstats.stats[j];
 		}
 	}
-	xtask_debug(0, 0, "RR_STATS: normal_push_success=%llu, normal_push_failed=%llu, redirected_push_success=%llu, redirected_push_failed=%llu, redirect_local_push=%llu, redirect_remote_push=%llu",
+	xtask_debug(0, 0, "RR_STATS:" 
+	"normal_push_success=%llu, "
+	"normal_push_failed=%llu, "
+	"redirected_push_success=%llu, "
+	"redirected_push_failed=%llu, "
+	"redirect_local_push=%llu, "
+	"redirect_remote_push=%llu, "
+	"req_sent=%llu, "
+	"req_handled=%llu, "
+	"ntasks_self=%llu, "
+	"ntasks_local=%llu, "
+	"ntasks_remote=%llu",
 	rrstats[RR_NORMAL_PUSH_SUCCESS],
 	rrstats[RR_NORMAL_PUSH_FAILED],
 	rrstats[RR_REDIRECTED_PUSH_SUCCESS],
 	rrstats[RR_REDIRECTED_PUSH_FAILED],
 	rrstats[RR_REDIRECT_LOCAL_PUSH],
-	rrstats[RR_REDIRECT_REMOTE_PUSH]
+	rrstats[RR_REDIRECT_REMOTE_PUSH],
+	rrstats[RR_REQ_SENT],
+	rrstats[RR_REQ_HANDLED],
+	rrstats[RR_NTASK_EXEC_SELF],
+	rrstats[RR_NTASK_EXEC_LOCAL],
+	rrstats[RR_NTASK_EXEC_REMOTE]
 	);
 }
 #endif
@@ -314,33 +231,6 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 	thr->last_q = 0;
 	thr->last_q_accessed = 0;
 
-
-	#ifdef XTASK_RR_PUSH
-	thr->last_req_q_accessed = 0;
-	if(thr->nvictims < 0 ){
-		thr->nvictims = N_VICTIMS;
-		xtask_debug(0, 0, "WARNING: nvictims is not set, using default value %d", N_VICTIMS);
-	}
-	if(thr->nreq_checks < 0 ){
-		thr->nreq_checks = N_REQ_CHECKS;
-		xtask_debug(0, 0, "WARNING: nreq_checks is not set, using default value %d", N_REQ_CHECKS);
-	}
-	if(thr->steal_divider < 0){
-		thr->steal_divider = STEAL_DIVIDER;
-		// xtask_debug(0, 0, "WARNING: steal_divider is not set, using default value %d", STEAL_DIVIDER);
-	}
-	if(thr->max_wait_countdown <= 0){
-		thr->max_wait_countdown = MAX_WAIT_COUNTDOWN;
-		xtask_debug(0, 0, "WARNING: max_wait_countdown is not set, using default value %d", MAX_WAIT_COUNTDOWN);
-	}
-
-	if(thr->cores_per_nz <= 0){
-		thr->cores_per_nz = CORES_PER_NZ;
-		xtask_debug(0, 0, "WARNING: cores_per_nz is not set, using default value %d", CORES_PER_NZ);
-	}
-	#endif // XTASK_RR_PUSH
-	
-	// thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * thr->num_queues);
 	thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * (thr->num_queues)); // with xws
 	for (int queue_id = 0; queue_id < thr->num_queues; queue_id++){
 			thr->td_task_q[queue_id] = (struct gomp_taskq *)gomp_malloc(sizeof(struct gomp_taskq));
@@ -358,20 +248,20 @@ gomp_alloc_task_q(struct gomp_thread *thr){
 				thr->td_task_q[queue_id]->td_deque[i] = NULL;
 			}
 	}
+
 	#ifdef XTASK_RR_PUSH
-	// thr->rrpush = (rrpush_t *)gomp_malloc(sizeof(rrpush_t));
 	thr->rrpush.round = 1;
 	thr->rrpush.req = 0;
-	// thr->rbws->req_q_size = INITIAL_TASK_DEQUE_SIZE;
-	// thr->rbws->req_head = 0;
-	// thr->rbws->req_tail = 0;
 	thr->rrpush.nre = 0;
 	thr->rrpush.redirect_tid = -1;
 	thr->rrpush.nredirects = INITIAL_TASK_DEQUE_SIZE >> thr->steal_divider;
-	thr->nz_leader = thr->ts.team_id / thr->cores_per_nz * thr->cores_per_nz;
+	thr->nz_leader = thr->ts.team_id / thr->ncores_numa * thr->ncores_numa;
+	// xtask_debug(0, 0, "ncores_numa=%d, nredirects=%d, nz_leader=%d", thr->ncores_numa, thr->rrpush.nredirects, thr->nz_leader);	
+	#endif
+	#ifdef XTASK_RR_STATS
 	for(int i = 0; i < RR_STATS_SIZE; i++)
 		thr->rrpush.rrstats.stats[i] = 0;
-	#endif // XTASK_RR_PSUH
+	#endif
 	return;
 };
 
@@ -393,7 +283,9 @@ gomp_push_task(struct gomp_task *task){
 
 	rrpush_t *rrpush = &thr->rrpush;
 	bool target_full = false;
+	#ifdef XTASK_RR_STATS
 	bool redirect = false;
+	#endif
 
 	if(rrpush->flag == RR_IDLE){
 	#endif
@@ -429,8 +321,10 @@ gomp_push_task(struct gomp_task *task){
 		else
 			target_thr = thr->thread_pool->threads[target_tid];
 
-		rrpush->nre++;
+		// rrpush->nre++;
+		#ifdef XTASK_RR_STATS
 		redirect = true;
+		#endif
 		// xtask_debug(0, 0, "redirecting task to %lu, round=%ld, nre=%d, nredirects=%d", target_tid, rrpush->round, rrpush->nre, rrpush->nredirects);
 
 		while(target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
@@ -439,16 +333,23 @@ gomp_push_task(struct gomp_task *task){
 				continue;
 			target_full = true;
 			// Redirect to a full queue, then current request should be updated
-			// return TASK_NOT_PUSHED;
 			break;
 		}
-		if(rrpush->nre > rrpush->nredirects || target_full){
+		if(!target_full){
+			rrpush->nre++; // we are sure this will be redirected
+		}else{
+			#ifdef XTASK_RR_STATS
+			rrpush->rrstats.stats[RR_REDIRECTED_PUSH_FAILED]++;
+			#endif
+		}
+		
+		if(rrpush->nre >= rrpush->nredirects || target_full){
 			rrpush->nre = 0;
 			rrpush->redirect_tid = -1;
 			rrpush->round++;
 			rrpush->flag = RR_IDLE;
-			rrpush->rrstats.stats[RR_REDIRECTED_PUSH_FAILED]++;
-			return TASK_NOT_PUSHED;
+			if(target_full)
+				return TASK_NOT_PUSHED;
 		}
 	}
 	#endif // XTASK_RR_PUSH
@@ -465,10 +366,11 @@ gomp_push_task(struct gomp_task *task){
 	// only change the last_q when it is not in the process of redirecting tasks
 	
 	#ifdef XTASK_RR_STATS
+	unsigned int leader = thr->nz_leader;
 	if ((!redirect)){
 		rrpush->rrstats.stats[RR_NORMAL_PUSH_SUCCESS]++;
 	}else{
-				if(target_tid / 24 == gtid / 24)
+				if(target_tid >= leader && target_tid < leader + thr->ncores_numa)
 					rrpush->rrstats.stats[RR_REDIRECT_LOCAL_PUSH]++;
 				else{
 					// xtask_debug(0, 0, "target_tid, gtid, redirect_tid=%lu, %lu, %d", target_tid, gtid, rrpush->redirect_tid);
@@ -1493,6 +1395,9 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 	if(use_xq){
 		
 		GOMP_ATOMIC_INC(&task->parent->td_incomplete_child_tasks);
+		#if defined(XTASK_RR_PUSH) && defined(XTASK_RR_STATS)
+		task->src_tid = thr->ts.team_id;
+		#endif
 
 		if(gomp_push_task (task) == TASK_NOT_PUSHED){
 		
@@ -1503,7 +1408,16 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 			unsigned long long task_fref = xperflog_get_new_fref(XPERF_TASK);
 			xperflog_record(XPERF_GOMP_TASK_END | XPERF_TASK, gomp_task_fref,  task_fref);
 			#endif // GOMP_USE_XPERFLOG
+
+
+
 			task->fn(task->fn_data);
+
+			#if defined(XTASK_RR_PUSH) && defined(XTASK_RR_STATS)
+			thr->rrpush.rrstats.stats[RR_NTASK_EXEC_SELF] ++;
+			#endif
+
+
 			#ifdef GOMP_USE_XPERFLOG
 			xperflog_record(XPERF_TASK_END | XPERF_GOMP_TASK, task_fref, gomp_task_fref);
 			#endif // GOMP_USE_XPERFLOG
@@ -2361,7 +2275,13 @@ void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
 	#ifdef XTASK_RR_PUSH
 	unsigned long last_req_qid = last_qid;
 	int wait_countdown = 0;
-	int max_wait_countdown = thr->max_wait_countdown;
+	int nwaits = thr->nwaits;
+	#ifdef XTASK_RR_STATS
+	unsigned mytid = thr->ts.team_id;
+	unsigned leader = thr->nz_leader;
+	unsigned nzcores = thr->ncores_numa;
+	#endif
+
 	#endif
 	if(gomp_barrier_last_thread(state)){
 			xflag_gathered(&thr->xflag, thr->ts.team_id == 0, state);
@@ -2419,7 +2339,7 @@ while(1){
 			if(wait_countdown > 0){
 				wait_countdown--;
 			}else{
-				wait_countdown = max_wait_countdown;
+				wait_countdown = nwaits;
 				send_reqs();
 			}
 			#endif
@@ -2462,7 +2382,23 @@ while(1){
 				unsigned long long task_fref = xperflog_get_new_fref(XPERF_TASK);
 				xperflog_record(XPERF_BAR_END | XPERF_TASK, bar_fref, task_fref);
 				#endif // GOMP_USE_XPERFLOG
+
+
+
 				child_task->fn (child_task->fn_data);
+
+				#if defined(XTASK_RR_PUSH) && defined(XTASK_RR_STATS)
+				if(child_task->src_tid >= leader && child_task->src_tid < leader + nzcores){
+					if(child_task->src_tid == mytid)
+						thr->rrpush.rrstats.stats[RR_NTASK_EXEC_SELF]++;
+					else
+						thr->rrpush.rrstats.stats[RR_NTASK_EXEC_LOCAL]++;
+				}else
+					thr->rrpush.rrstats.stats[RR_NTASK_EXEC_REMOTE]++;
+				#endif
+
+
+
 				#ifdef GOMP_USE_XPERFLOG
 				xperflog_record(XPERF_TASK_END | XPERF_BAR, task_fref, bar_fref); // task end can be used to encapsulate the task
 				#endif // GOMP_USE_XPERFLOG
@@ -2705,7 +2641,12 @@ GOMP_taskwait (void)
 	#ifdef XTASK_RR_PUSH
 	unsigned long last_req_qid = last_qid;
 	int wait_countdown = 0;
-	int max_wait_countdown = thr->max_wait_countdown;
+	int nwaits = thr->nwaits;
+	#ifdef XTASK_RR_STATS
+	unsigned mytid = thr->ts.team_id;
+	unsigned leader = thr->nz_leader;
+	unsigned nzcores = thr->ncores_numa;
+	#endif
 	#endif
 	gomp_task_t *next_task;
 	if(__builtin_expect(thr->use_xq, 1)){
@@ -2745,7 +2686,7 @@ GOMP_taskwait (void)
 				if(wait_countdown > 0){
 					wait_countdown--;
 				}else{
-					wait_countdown = max_wait_countdown;
+					wait_countdown = nwaits;
 					send_reqs();
 				}
 				#endif
@@ -2816,7 +2757,21 @@ GOMP_taskwait (void)
 					unsigned long long task_fref = xperflog_get_new_fref(XPERF_TASK);
 					xperflog_record(XPERF_TASKWAIT_END | XPERF_TASK, taskwait_fref, task_fref);
 					#endif // GOMP_USE_XPERFLOG
+
+
 					child_task->fn (child_task->fn_data);
+
+					#if defined(XTASK_RR_PUSH) && defined(XTASK_RR_STATS)
+					if(child_task->src_tid >= leader && child_task->src_tid < leader + nzcores){
+						if(child_task->src_tid == mytid)
+							thr->rrpush.rrstats.stats[RR_NTASK_EXEC_SELF]++;
+						else
+							thr->rrpush.rrstats.stats[RR_NTASK_EXEC_LOCAL]++;
+					}else
+						thr->rrpush.rrstats.stats[RR_NTASK_EXEC_REMOTE]++;
+					#endif
+
+
 					#ifdef GOMP_USE_XPERFLOG
 					xperflog_record(XPERF_TASK_END | XPERF_TASKWAIT, task_fref, taskwait_fref); // task end can be used to encapsulate the task
 					#endif // GOMP_USE_XPERFLOG

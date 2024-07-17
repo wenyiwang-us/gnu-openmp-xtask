@@ -64,10 +64,10 @@ struct gomp_thread_start_data
   bool use_xq;
 #ifdef XTASK_RR_PUSH
   int nvictims;
-  int nreq_checks;
   int steal_divider;
-  int max_wait_countdown;
-  int cores_per_nz;
+  int local_prob;
+  int nwaits;
+  int ncores_numa;
 #endif
 #endif
 };
@@ -119,12 +119,12 @@ gomp_thread_start (void *xdata)
 #ifdef XTASK_RR_PUSH
 	if(thr->use_xq){
 		thr->nvictims = data->nvictims;
-		thr->nreq_checks = data->nreq_checks;
 		thr->steal_divider = data->steal_divider;
-		thr->max_wait_countdown = data->max_wait_countdown;
-		thr->cores_per_nz = data->cores_per_nz;
+		thr->local_prob = data->local_prob;
+		thr->nwaits = data->nwaits;
+		thr->ncores_numa = data->ncores_numa;
 	}
-	// xtask_debug(0, 0, "XTASK v.1.4, use_xq=%d, nvictims=%d, nreq_checks=%d, steal_divider=%d, max_wait_countdown=%d", thr->use_xq, thr->nvictims, thr->nreq_checks, thr->steal_divider, thr->max_wait_countdown);
+	// xtask_debug(0, 0, "XTASK v.1.4, use_xq=%d, nvictims=%d, nreq_checks=%d, steal_divider=%d, nwaits=%d", thr->use_xq, thr->nvictims, thr->nreq_checks, thr->steal_divider, thr->nwaits);
 #endif
 	if(thr->use_xq && thr->td_task_q == NULL)
 	  	gomp_alloc_task_q(thr);
@@ -383,28 +383,23 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	thr->use_xq = 1;
 	gomp_num_task_queues = nthreads;
 
-	xtask_debug(0, 0, "XTASK v.1.5, nthreads=%d, use_xq=%d, nested=%d, level=%d.", nthreads, thr->use_xq, nested, thr->ts.level);
+	xtask_debug(0, 0, "XTASK v.1.7, nthreads=%d, use_xq=%d, nested=%d, level=%d.", nthreads, thr->use_xq, nested, thr->ts.level);
 #ifdef XTASK_RR_PUSH
-if(thr->use_xq){
-	ws_get_env_vars();
-	xtask_debug(0, 0, "XTASK-Redirect-Push: N_VICTIMS=%d, N_REQ_CHECKS=%d, STEAL_DIVIDER=%d, MAX_WAIT_COUNTDOWN=%d, CORES_PER_NZ=%d\n", thr->nvictims, thr->nreq_checks, thr->steal_divider, thr->max_wait_countdown, thr->cores_per_nz);
-}
-#endif // XTASK_RR_PUSH
-if(thr->use_xq && thr->td_task_q == NULL)
-	gomp_alloc_task_q(thr);
 
+	if(thr->use_xq && thr->td_task_q == NULL){
+		// Only when first team_start will call this
+		rr_get_env_vars();
+		xtask_debug(0, 0, "XTASK-Redirect-Push: N_VICTIMS=%d, STEAL_DIVIDER=%d, LOCAL_PROB=%d, NWAITS=%d, NCORES_NUMA=%d\n", thr->nvictims, thr->steal_divider, thr->local_prob, thr->nwaits, thr->ncores_numa);
+	}
+#endif
+	if(thr->use_xq && thr->td_task_q == NULL)
+		gomp_alloc_task_q(thr);
+		
 #ifdef GOMP_USE_XPERFLOG
 	xtask_debug(0, 0, "XPERFLOG v1 enabled.\n");
 	GOMP_ATOMIC_ST_REL(&team->xperflog_awaited, nthreads);
 	xperflog_init();
 #endif // GOMP_USE_XPERFLOG
-#ifdef XTASK_ENABLE_STATS
-	xtask_debug(0, 0, "XTASK_STATS enabled.\n");
-#endif // XTASK_ENABLE_STATS
-
-#ifdef XTASK_SWS
-	xtask_debug(0, 0, "XTASK_SimpleWS enabled.\n");
-#endif // XTASK_SWS
 #endif // GOMP_USE_XQUEUE
 
   if (__builtin_expect (gomp_places_list != NULL, 0) && thr->place == 0)
@@ -450,6 +445,8 @@ if(thr->use_xq && thr->td_task_q == NULL)
   thr->task->taskgroup = taskgroup;
   team->implicit_task[0].icv.nthreads_var = nthreads_var;
   team->implicit_task[0].icv.bind_var = bind_var;
+
+
 
   if (nthreads == 1)
     return;
@@ -836,10 +833,10 @@ if(thr->use_xq && thr->td_task_q == NULL)
       start_data->place = 0;
 #if defined(GOMP_USE_XQUEUE) && defined(XTASK_RR_PUSH)
 	  start_data->nvictims = thr->nvictims;
-	  start_data->nreq_checks = thr->nreq_checks;
 	  start_data->steal_divider = thr->steal_divider;
-	  start_data->max_wait_countdown = thr->max_wait_countdown;
-	  start_data->cores_per_nz = thr->cores_per_nz;
+	  start_data->local_prob = thr->local_prob;	
+	  start_data->nwaits = thr->nwaits;
+	  start_data->ncores_numa = thr->ncores_numa;
 #endif
       if (__builtin_expect (gomp_places_list != NULL, 0))
 	{
