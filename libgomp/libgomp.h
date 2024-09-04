@@ -76,7 +76,7 @@
 // #define GOMP_USE_XPERFLOG 1
 #define XTASK_RWS 1 // random work stealing
 
-#define ENABLE_WSSTATS 1 // xtask performance statistics
+// #define ENABLE_WSSTATS 1 // xtask performance statistics
 // #define ENABLE_PERFLOG 1 // xtask performance logging
 
 
@@ -661,6 +661,10 @@ struct gomp_task
   unsigned int src_tid; // source thread id that instantiated this task, for ws we are curious about its locality
 #endif
   unsigned long td_incomplete_child_tasks;
+#ifdef GOMP_USE_XPERFLOG
+  unsigned long long task_len;
+  unsigned long long task_id;
+#endif
 #endif
   /* Dependencies provided and/or needed for this task.  DEPEND_COUNT
      is the number of items available.  */
@@ -1018,8 +1022,8 @@ struct rws{
 #define XPERFLOG_MAX_EVENTS 1<<27 // 128MB events
 // lets use bit 10 to indicate if the event is a sample event
 #define XPERF_END_SHIFT 5
-#define LEVENT(a) ((a)&((1 << XPERF_END_SHIFT) - 1))
-#define HEVENT(a) ((a)>> XPERF_END_SHIFT)
+#define LEVENT(a) ((a) & ((1 << XPERF_END_SHIFT) - 1))
+#define HEVENT(a) ((a) & (~((1 << XPERF_END_SHIFT) -1)))
 typedef enum xperf_event_type{
 /**
  * Below is the event types with/without sample
@@ -1052,7 +1056,8 @@ typedef struct xperflog_cell {
   xperf_type_t event; // event type
   unsigned long long hfref; // frame reference number for highbit event
   unsigned long long lfref; // frame reference number for lowbit event
-  long long sample; // sample
+  long long sample_qsize; // sample queue size
+  long long value; // value we want
 } xperflog_cell_t
 __attribute__((aligned(64)));
 
@@ -1063,7 +1068,7 @@ typedef struct xperflog {
   unsigned int last_q;
   long long ssum; // sample sum
   char *xperflog_path;
-  char filename[64]; // log file name
+  char filename[256]; // log file name
   void *fp; // use void * instead of FILE * to avoid including stdio.h here
 
   int tid; // thread id

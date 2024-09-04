@@ -563,7 +563,7 @@ void xperflog_init(){
 	}
 	perflog->fp = NULL;
 	// append tid to the filename
-	snprintf(perflog->filename, 64, "%s/xperflog_%d_%d.csv", perflog->xperflog_path, thr->ts.team_id, perflog->generation);
+	snprintf(perflog->filename, 256, "%s/xperflog_%d_%d.csv", perflog->xperflog_path, thr->ts.team_id, perflog->generation);
 	perflog->log = (xperflog_cell_t *)gomp_malloc(sizeof(xperflog_cell_t) * XPERFLOG_MAX_EVENTS);
 	perflog->eidx = 0;
 	perflog->last_q = 0;
@@ -591,7 +591,8 @@ void xperflog_record(xperf_type_t event, unsigned long long hfref, unsigned long
 	struct gomp_thread *thr = gomp_thread();
 	struct xperflog *perflog = &thr->xperflog;
 	if(perflog->eidx >= XPERFLOG_MAX_EVENTS){
-		xtask_debug(0, 0, "xperf - record: idx exceeds max events.");
+		xtask_debug(0, 0, "**ERROR** : perflog is full.");
+		exit(1);
 		return;
 	}
 
@@ -614,7 +615,7 @@ void xperflog_record(xperf_type_t event, unsigned long long hfref, unsigned long
 	perflog->log[perflog->eidx].hfref = hfref;
 	perflog->log[perflog->eidx].lfref = lfref;
 	// record sample task count
-	// unsigned long long sample = 0;
+
 	if(event > XPERF_THREAD){
 		// for(int i = 0; i < 4; i++){
 			// perflog->last_q = perflog->last_q + i < thr->num_queues ? perflog->last_q + i : (perflog->last_q + i) % thr->num_queues;
@@ -623,7 +624,22 @@ void xperflog_record(xperf_type_t event, unsigned long long hfref, unsigned long
 			perflog->last_q = perflog->last_q + 1 >= thr->num_queues ? 0 : perflog->last_q + 1;
 		// }
 		if(event > XPERF_THREAD)
-			perflog->log[perflog->eidx].sample = perflog->ssum;
+			perflog->log[perflog->eidx].sample_qsize = perflog->ssum;
+
+
+		/* 
+		If previous event is task start, then any spent before current event is considered as tasking time;
+		If previous event is and end event only, any time in between is considered as tasking time;
+		*/
+		if (LEVENT(perflog->log[perflog->eidx - 1].event) == XPERF_TASK || !LEVENT(perflog->log[perflog->eidx - 1].event)){
+			
+			thr->task->task_len += perflog->log[perflog->eidx].ts - perflog->log[perflog->eidx - 1].ts;
+		}
+		
+		if(HEVENT(event) == XPERF_TASK_END){
+			perflog->log[perflog->eidx].value = thr->task->task_len;
+			// xtask_debug(0, 0, "task_len=%lld", thr->task->task_len);
+		}
 
 		// We can still access the current task, just finished task, since we haven't invalidated the task yet
 		#ifdef ENABLE_PERFSTATS
@@ -647,11 +663,11 @@ void xperflog_wait(){
 		zero = 0;
 	}
 }
+
 /**
  * Now this should be called by the users with the wrapper
  * And it has to be called under the omp parallel region
 */
-
 void xperflog_dump(struct gomp_thread *thr){
 	// xtask_debug(0, 0, "dumping");
 	// the following is a bit anti-pattern.
@@ -665,14 +681,15 @@ void xperflog_dump(struct gomp_thread *thr){
 	}
 
 	// lets first do this using fprintf to output as csv file
-	fprintf(perflog->fp, "timestamp,event,hfref,lfref,sample\n");
+	fprintf(perflog->fp, "timestamp,event,hfref,lfref,sample_qsize,value\n");
 	for(unsigned long long i = 0; i < perflog->eidx; i++){
-		fprintf(perflog->fp, "%llu,%d,%llu,%llu,%lld\n", 
+		fprintf(perflog->fp, "%llu,%d,%llu,%llu,%lld,%llu\n", 
 		perflog->log[i].ts, 
 		perflog->log[i].event, 
 		perflog->log[i].hfref, 
 		perflog->log[i].lfref,  
-		perflog->log[i].sample);
+		perflog->log[i].sample_qsize,
+		perflog->log[i].value);
 	}
 
 	fclose(perflog->fp);
@@ -727,6 +744,8 @@ void xperflog_dump_reset(){
 void xomp_perflog_dump(void){
 	struct gomp_thread *thr = gomp_thread();
 	#ifdef GOMP_USE_XPERFLOG
+	if(thr->ts.team_id == 0)
+		xtask_debug(0, 0, "Dump PERFLOG to: %s", thr->xperflog.xperflog_path);
 	xperflog_dump(thr);
 	#else
 	#ifdef XTASK_STATS
@@ -822,6 +841,11 @@ gomp_init_task (struct gomp_task *task, struct gomp_task *parent_task,
   task->parent_depends_on = false;
 #ifdef GOMP_USE_XQUEUE
   GOMP_ATOMIC_ST_RLX(&task->td_incomplete_child_tasks, 0);
+
+#ifdef GOMP_USE_XPERFLOG
+ task->task_len = 0;
+#endif
+
 #endif
 }
 
@@ -2297,8 +2321,11 @@ while(1){
 				xperflog_record(XPERF_BAR_END | XPERF_TASK, bar_fref, task_fref);
 				#endif // GOMP_USE_XPERFLOG
 
-
 				child_task->fn (child_task->fn_data);
+
+				#ifdef GOMP_USE_XPERFLOG
+				xperflog_record(XPERF_TASK_END | XPERF_BAR, task_fref, bar_fref); // task end can be used to encapsulate the task
+				#endif // GOMP_USE_XPERFLOG
 
 				/* WSSTATS */
 				#ifdef ENABLE_WSSTATS
@@ -2313,9 +2340,7 @@ while(1){
 				}
 				#endif
 
-				#ifdef GOMP_USE_XPERFLOG
-				xperflog_record(XPERF_TASK_END | XPERF_BAR, task_fref, bar_fref); // task end can be used to encapsulate the task
-				#endif // GOMP_USE_XPERFLOG
+
 			}
 				
 			thr->task = task;
@@ -2664,9 +2689,12 @@ GOMP_taskwait (void)
 					xperflog_record(XPERF_TASKWAIT_END | XPERF_TASK, taskwait_fref, task_fref);
 					#endif // GOMP_USE_XPERFLOG
 
-
 					child_task->fn (child_task->fn_data);
-					
+
+					#ifdef GOMP_USE_XPERFLOG
+					xperflog_record(XPERF_TASK_END | XPERF_TASKWAIT, task_fref, taskwait_fref); // task end can be used to encapsulate the task
+					#endif // GOMP_USE_XPERFLOG
+
 					/* WSSTATS */
 					#ifdef ENABLE_WSSTATS
 					if(child_task->src_tid >= numa_start && child_task->src_tid < numa_end){
@@ -2680,9 +2708,7 @@ GOMP_taskwait (void)
 					}
 					#endif
 
-					#ifdef GOMP_USE_XPERFLOG
-					xperflog_record(XPERF_TASK_END | XPERF_TASKWAIT, task_fref, taskwait_fref); // task end can be used to encapsulate the task
-					#endif // GOMP_USE_XPERFLOG
+
 				}
 					
 				thr->task = task; // ww: task resumed
