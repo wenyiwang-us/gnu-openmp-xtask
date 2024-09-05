@@ -384,11 +384,11 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	gomp_num_task_queues = nthreads;
 
 	xtask_debug(0, 0, "XTASK v.1.7, nthreads=%d, use_xq=%d, nested=%d, level=%d.", nthreads, thr->use_xq, nested, thr->ts.level);
-#ifdef XTASK_RR_PUSH
+#if defined(XTASK_RR_PUSH) || defined(XTASK_STATS)
 
 	if(thr->use_xq && thr->td_task_q == NULL){
 		// Only when first team_start will call this
-		rr_get_env_vars();
+		get_env_vars();
 		xtask_debug(0, 0, "XTASK-Redirect-Push: N_VICTIMS=%d, STEAL_DIVIDER=%d, LOCAL_PROB=%d, NWAITS=%d, NCORES_NUMA=%d\n", thr->nvictims, thr->steal_divider, thr->local_prob, thr->nwaits, thr->ncores_numa);
 	}
 #endif

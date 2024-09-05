@@ -79,10 +79,10 @@ static gomp_task_t* gomp_remove_my_task();
 static gomp_task_t* gomp_remove_aux_task(unsigned long *);
 
 
-#ifdef XTASK_RR_PUSH
+#if defined(XTASK_STATS) || defined(XTASK_RR_PUSH)
 #include <stdio.h>
 #include <time.h>
-void rr_get_env_vars(){
+void get_env_vars(){
 	struct gomp_thread *thr = gomp_thread();
 	g_seed = time(NULL);
 	
@@ -130,7 +130,10 @@ void rr_get_env_vars(){
 	}
 
 }
+#endif // XTASK_STATS
 
+
+#ifdef XTASK_RR_PUSH
 
 static inline void send_reqs(){
 	struct gomp_thread *thr = gomp_thread();
@@ -204,10 +207,7 @@ static void rrdump(){
 	"redirect_local_push=%llu, "
 	"redirect_remote_push=%llu, "
 	"req_sent=%llu, "
-	"req_handled=%llu, "
-	"ntasks_self=%llu, "
-	"ntasks_local=%llu, "
-	"ntasks_remote=%llu",
+	"req_handled=%llu, ",
 	rrstats[RR_NORMAL_PUSH_SUCCESS],
 	rrstats[RR_NORMAL_PUSH_FAILED],
 	rrstats[RR_REDIRECTED_PUSH_SUCCESS],
@@ -215,15 +215,37 @@ static void rrdump(){
 	rrstats[RR_REDIRECT_LOCAL_PUSH],
 	rrstats[RR_REDIRECT_REMOTE_PUSH],
 	rrstats[RR_REQ_SENT],
-	rrstats[RR_REQ_HANDLED],
-	rrstats[RR_NTASK_EXEC_SELF],
-	rrstats[RR_NTASK_EXEC_LOCAL],
-	rrstats[RR_NTASK_EXEC_REMOTE]
+	rrstats[RR_REQ_HANDLED]
+	);
+}
+#endif // XTASK_RR_STATS
+#endif // XTASK_RR_PUSH
+
+
+#ifdef XTASK_STATS
+void dump_stats(){
+	struct gomp_thread *thr = gomp_thread();
+	if (thr->ts.team_id != 0)
+		return;
+	unsigned long long xstats[XSTATS_SIZE];
+	for(int i = 0; i < XSTATS_SIZE; i++)
+		xstats[i] = 0;
+	for(int i = 0; i < thr->ts.team->nthreads; i++){
+		xstats_t *txstats = thr->thread_pool->threads[i]->xstats;
+		for(int j = 0; j < XSTATS_SIZE; j++){
+			xstats[j] += txstats[j];
+		}
+	}
+	xtask_debug(0, 0, "XTASK_STATS: "
+	"ntasks_self=%llu, "
+	"ntasks_local=%llu, "
+	"ntasks_remote=%llu",
+	xstats[XSTATS_NTASKS_SELF],
+	xstats[XSTATS_NTASKS_LOCAL],
+	xstats[XSTATS_NTASKS_REMOTE]
 	);
 }
 #endif
-#endif
-
 void
 gomp_alloc_task_q(struct gomp_thread *thr){
 	if (thr->num_queues == 0)
@@ -636,10 +658,7 @@ void xperflog_init(){
 	}
 	perflog->fp = NULL;
 	// append tid to the filename
-	snprintf(perflog->filename, 64, "%s/xperflog_%d_%d.csv", perflog->xperflog_path, thr->ts.team_id, perflog->generation);
-	#ifdef XTASK_ENABLE_WS_STATS
-	snprintf(perflog->wsstats_fname, 64, "%s/wsstats_%d.csv", perflog->xperflog_path, thr->ts.team_id);
-	#endif
+	snprintf(perflog->filename, 256, "%s/xperflog_%d_%d.csv", perflog->xperflog_path, thr->ts.team_id, perflog->generation);
 	perflog->log = (xperflog_cell_t *)gomp_malloc(sizeof(xperflog_cell_t) * XPERFLOG_MAX_EVENTS);
 	perflog->eidx = 0;
 	perflog->last_q = 0;
@@ -667,7 +686,8 @@ void xperflog_record(xperf_type_t event, unsigned long long hfref, unsigned long
 	struct gomp_thread *thr = gomp_thread();
 	struct xperflog *perflog = &thr->xperflog;
 	if(perflog->eidx >= XPERFLOG_MAX_EVENTS){
-		xtask_debug(0, 0, "xperf - record: idx exceeds max events.");
+		xtask_debug(0, 0, "**ERROR** : perflog is full.");
+		exit(1);
 		return;
 	}
 
@@ -690,6 +710,7 @@ void xperflog_record(xperf_type_t event, unsigned long long hfref, unsigned long
 	perflog->log[perflog->eidx].hfref = hfref;
 	perflog->log[perflog->eidx].lfref = lfref;
 	// record sample task count
+
 	if(event > XPERF_THREAD){
 		// for(int i = 0; i < 4; i++){
 			// perflog->last_q = perflog->last_q + i < thr->num_queues ? perflog->last_q + i : (perflog->last_q + i) % thr->num_queues;
@@ -697,7 +718,29 @@ void xperflog_record(xperf_type_t event, unsigned long long hfref, unsigned long
 			perflog->ssum +=(long long)(thr->td_task_q[perflog->last_q]->nin - thr->td_task_q[perflog->last_q]->nout);
 			perflog->last_q = perflog->last_q + 1 >= thr->num_queues ? 0 : perflog->last_q + 1;
 		// }
-		perflog->log[perflog->eidx].sample = perflog->ssum;
+		if(event > XPERF_THREAD)
+			perflog->log[perflog->eidx].sample_qsize = perflog->ssum;
+
+
+		/* 
+		If previous event is task start, then any spent before current event is considered as tasking time;
+		If previous event is and end event only, any time in between is considered as tasking time;
+		*/
+		if (LEVENT(perflog->log[perflog->eidx - 1].event) == XPERF_TASK || !LEVENT(perflog->log[perflog->eidx - 1].event)){
+			
+			thr->task->task_len += perflog->log[perflog->eidx].ts - perflog->log[perflog->eidx - 1].ts;
+		}
+		
+		if(HEVENT(event) == XPERF_TASK_END){
+			perflog->log[perflog->eidx].value = thr->task->task_len;
+			// xtask_debug(0, 0, "task_len=%lld", thr->task->task_len);
+		}
+
+		// We can still access the current task, just finished task, since we haven't invalidated the task yet
+		#ifdef ENABLE_PERFSTATS
+		if(event == XPERF_TASK_END)
+			perflog->log[perflog->eidx].sample = (long long)(thr->task->src_tid);
+		#endif
 	}
 
 	perflog->eidx++;
@@ -715,11 +758,11 @@ void xperflog_wait(){
 		zero = 0;
 	}
 }
+
 /**
  * Now this should be called by the users with the wrapper
  * And it has to be called under the omp parallel region
 */
-
 void xperflog_dump(struct gomp_thread *thr){
 	// xtask_debug(0, 0, "dumping");
 	// the following is a bit anti-pattern.
@@ -733,39 +776,16 @@ void xperflog_dump(struct gomp_thread *thr){
 	}
 
 	// lets first do this using fprintf to output as csv file
-	fprintf(perflog->fp, "timestamp,event,hfref,lfref,sample\n");
+	fprintf(perflog->fp, "timestamp,event,hfref,lfref,sample_qsize,value\n");
 	for(unsigned long long i = 0; i < perflog->eidx; i++){
-		fprintf(perflog->fp, "%llu,%d,%llu,%llu,%lld\n", 
+		fprintf(perflog->fp, "%llu,%d,%llu,%llu,%lld,%llu\n", 
 		perflog->log[i].ts, 
 		perflog->log[i].event, 
 		perflog->log[i].hfref, 
 		perflog->log[i].lfref,  
-		perflog->log[i].sample);
+		perflog->log[i].sample_qsize,
+		perflog->log[i].value);
 	}
-
-	#ifdef XTASK_ENABLE_WS_STATS
-	FILE *wsfp = fopen(perflog->wsstats_fname, "w");
-	if(wsfp == NULL){
-		xtask_debug(0, 0, "xperf - dump: wsstats file pointer is null.");
-		return;
-	}
-	fprintf(wsfp, "tid,req_send_success,req_send_failed,req_handle_success,req_handle_failed,req_processed,normal_push_success,normal_push_failed,redirect_push_success,redirect_normal_push_success,redirect_normal_push_failed\n");
-	fprintf(wsfp, "%d,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld\n",
-		thr->ts.team_id,
-		thr->rbws->ws_stats[WS_REQ_SEND_SUCCESS],
-		thr->rbws->ws_stats[WS_REQ_SEND_FAILED],
-		thr->rbws->ws_stats[WS_REQ_HANDLE_SUCCESS],
-		thr->rbws->ws_stats[WS_REQ_HANDLE_FAILED],
-		thr->rbws->ws_stats[WS_REQ_PROCESSED],
-		thr->rbws->ws_stats[WS_NORMAL_PUSH_SUCCESS],
-		thr->rbws->ws_stats[WS_NORMAL_PUSH_FAILED],
-		thr->rbws->ws_stats[WS_REDIRECT_PUSH_SUCCESS],
-		thr->rbws->ws_stats[WS_REDIRECT_NORMAL_PUSH_SUCCESS],
-		thr->rbws->ws_stats[WS_REDIRECT_NORMAL_PUSH_FAILED]
-	);
-	fclose(wsfp);
-	#endif
-
 
 	fclose(perflog->fp);
 	perflog->fp = NULL;
@@ -806,8 +826,10 @@ void xperflog_dump_reset(){
 	struct gomp_thread *thr = gomp_thread();
 	xperflog_dump(thr);
 	xperflog_reset(thr);
+	// xperflog_done(thr);
 }
 #endif // GOMP_USE_XPERFLOG
+
 
 /**
  * Interfaces that can be called by the user
@@ -820,10 +842,6 @@ void xomp_perflog_dump(void){
 	#ifdef GOMP_USE_XPERFLOG
 	xperflog_dump(thr);
 	#endif
-	// show some of the stats
-	#ifdef XTASK_ENABLE_STATS
-	xstats_dump(thr);
-	#endif
 	#ifndef GOMP_USE_XPERFLOG
 	if(thr->ts.team_id == 0){
 		xtask_debug(0, 0, "[XPERFLOG] DUMP: XPERFLOG is not enabled.\n\n\n\n");
@@ -831,14 +849,14 @@ void xomp_perflog_dump(void){
 	#endif // GOMP_USE_XPERFLOG
 
 	#if defined(XTASK_RR_PUSH) && defined(XTASK_RR_STATS)
-
 	rrdump();
 	#endif
 
-
-	#if defined(XTASK_STATS) || defined(XTASK_ENABLE_WS_STATS)
-	xstats_dump();
+	#ifdef XTASK_STATS
+	dump_stats();
 	#endif
+
+
 
 }
 
@@ -887,6 +905,9 @@ gomp_init_task (struct gomp_task *task, struct gomp_task *parent_task,
   task->parent_depends_on = false;
 #ifdef GOMP_USE_XQUEUE
   GOMP_ATOMIC_ST_RLX(&task->td_incomplete_child_tasks, 0);
+#ifdef GOMP_USE_XPERFLOG
+  task->task_len = 0;
+#endif
 #endif
 }
 
@@ -1395,7 +1416,7 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 	if(use_xq){
 		
 		GOMP_ATOMIC_INC(&task->parent->td_incomplete_child_tasks);
-		#if defined(XTASK_RR_PUSH) && defined(XTASK_RR_STATS)
+		#ifdef XTASK_STATS
 		task->src_tid = thr->ts.team_id;
 		#endif
 
@@ -1413,8 +1434,9 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 
 			task->fn(task->fn_data);
 
-			#if defined(XTASK_RR_PUSH) && defined(XTASK_RR_STATS)
-			thr->rrpush.rrstats.stats[RR_NTASK_EXEC_SELF] ++;
+			#if defined(XTASK_RR_STATS) || defined(XTASK_STATS)
+			// thr->rrpush.rrstats.stats[RR_NTASK_EXEC_SELF] ++;
+			thr->xstats[XSTATS_NTASKS_SELF] ++;
 			#endif
 
 
@@ -2276,12 +2298,11 @@ void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
 	unsigned long last_req_qid = last_qid;
 	int wait_countdown = 0;
 	int nwaits = thr->nwaits;
-	#ifdef XTASK_RR_STATS
+	#endif
+	#ifdef XTASK_STATS
 	unsigned mytid = thr->ts.team_id;
 	unsigned leader = thr->nz_leader;
 	unsigned nzcores = thr->ncores_numa;
-	#endif
-
 	#endif
 	if(gomp_barrier_last_thread(state)){
 			xflag_gathered(&thr->xflag, thr->ts.team_id == 0, state);
@@ -2386,16 +2407,26 @@ while(1){
 
 
 				child_task->fn (child_task->fn_data);
-
-				#if defined(XTASK_RR_PUSH) && defined(XTASK_RR_STATS)
+				
+				#ifdef XTASK_STATS
 				if(child_task->src_tid >= leader && child_task->src_tid < leader + nzcores){
 					if(child_task->src_tid == mytid)
-						thr->rrpush.rrstats.stats[RR_NTASK_EXEC_SELF]++;
+						thr->xstats[XSTATS_NTASKS_SELF]++;
 					else
-						thr->rrpush.rrstats.stats[RR_NTASK_EXEC_LOCAL]++;
+						thr->xstats[XSTATS_NTASKS_LOCAL]++;
 				}else
-					thr->rrpush.rrstats.stats[RR_NTASK_EXEC_REMOTE]++;
+					thr->xstats[XSTATS_NTASKS_REMOTE]++;
 				#endif
+
+				// #if defined(XTASK_RR_PUSH) && defined(XTASK_STATS)
+				// if(child_task->src_tid >= leader && child_task->src_tid < leader + nzcores){
+				// 	if(child_task->src_tid == mytid)
+				// 		thr->rrpush.rrstats.stats[RR_NTASK_EXEC_SELF]++;
+				// 	else
+				// 		thr->rrpush.rrstats.stats[RR_NTASK_EXEC_LOCAL]++;
+				// }else
+				// 	thr->rrpush.rrstats.stats[RR_NTASK_EXEC_REMOTE]++;
+				// #endif
 
 
 
@@ -2642,12 +2673,14 @@ GOMP_taskwait (void)
 	unsigned long last_req_qid = last_qid;
 	int wait_countdown = 0;
 	int nwaits = thr->nwaits;
-	#ifdef XTASK_RR_STATS
+	#endif
+
+	#ifdef XTASK_STATS
 	unsigned mytid = thr->ts.team_id;
 	unsigned leader = thr->nz_leader;
 	unsigned nzcores = thr->ncores_numa;
 	#endif
-	#endif
+
 	gomp_task_t *next_task;
 	if(__builtin_expect(thr->use_xq, 1)){
 		// has to reimplement our own version of taskwait;
@@ -2760,16 +2793,25 @@ GOMP_taskwait (void)
 
 
 					child_task->fn (child_task->fn_data);
-
-					#if defined(XTASK_RR_PUSH) && defined(XTASK_RR_STATS)
+					#ifdef XTASK_STATS
 					if(child_task->src_tid >= leader && child_task->src_tid < leader + nzcores){
 						if(child_task->src_tid == mytid)
-							thr->rrpush.rrstats.stats[RR_NTASK_EXEC_SELF]++;
+							thr->xstats[XSTATS_NTASKS_SELF]++;
 						else
-							thr->rrpush.rrstats.stats[RR_NTASK_EXEC_LOCAL]++;
+							thr->xstats[XSTATS_NTASKS_LOCAL]++;
 					}else
-						thr->rrpush.rrstats.stats[RR_NTASK_EXEC_REMOTE]++;
+						thr->xstats[XSTATS_NTASKS_REMOTE]++;
 					#endif
+
+					// #if defined(XTASK_RR_PUSH) && defined(XTASK_RR_STATS)
+					// if(child_task->src_tid >= leader && child_task->src_tid < leader + nzcores){
+					// 	if(child_task->src_tid == mytid)
+					// 		thr->rrpush.rrstats.stats[RR_NTASK_EXEC_SELF]++;
+					// 	else
+					// 		thr->rrpush.rrstats.stats[RR_NTASK_EXEC_LOCAL]++;
+					// }else
+					// 	thr->rrpush.rrstats.stats[RR_NTASK_EXEC_REMOTE]++;
+					// #endif
 
 
 					#ifdef GOMP_USE_XPERFLOG

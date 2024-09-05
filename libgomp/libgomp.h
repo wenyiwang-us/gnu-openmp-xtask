@@ -75,6 +75,7 @@
 #define GOMP_USE_XQUEUE 1
 #define XTASK_RR_PUSH 1 // random redirect push
 // #define XTASK_RR_STATS 1 // random redirect stats
+// #define XTASK_STATS 1
 // #define GOMP_USE_XPERFLOG 1
 // #define XTASK_RANDOM_BWS 1 // random batch redirected workstealing
 // #define XTASK_ENABLE_WS_STATS 1
@@ -661,17 +662,18 @@ struct gomp_task
      are satisfied.  */
   bool parent_depends_on;
 #ifdef GOMP_USE_XQUEUE
+  unsigned int src_tid; // source thread id that instantiated this task, for ws we are curious about its locality
   unsigned long td_incomplete_child_tasks;
-
-#if defined(XTASK_RR_PUSH) && defined(XTASK_RR_STATS)
-  unsigned int src_tid;
+#ifdef GOMP_USE_XPERFLOG
+  unsigned long long task_len;
+  unsigned long long task_id;
 #endif
-
 #endif
   /* Dependencies provided and/or needed for this task.  DEPEND_COUNT
      is the number of items available.  */
   struct gomp_task_depend_entry depend[];
 };
+
 
 /* This structure describes a single #pragma omp taskgroup.  */
 
@@ -824,7 +826,7 @@ struct gomp_team
 
 /** XTASK_RR_PUSH - xtask random redirect push */
 
-#ifdef XTASK_RR_PUSH
+#if defined(XTASK_RR_PUSH) || defined(XTASK_STATS)
 #define N_VICTIMS 4
 #define STEAL_DIVIDER 0 // now this means shift right 0 bits
 #define MAX_NWAITS 1000 // in loops
@@ -851,9 +853,6 @@ typedef enum rrstats_type{
   RR_REDIRECTED_PUSH_FAILED,
   RR_REQ_SENT,
   RR_REQ_HANDLED,
-  RR_NTASK_EXEC_LOCAL,
-  RR_NTASK_EXEC_SELF,
-  RR_NTASK_EXEC_REMOTE,
   RR_STATS_SIZE
 } rrstats_type_t;
 
@@ -924,12 +923,21 @@ struct xflag{
 }
 __attribute__((aligned(64)));
 
+#ifdef XTASK_STATS
+typedef enum xtask_stats{
+  XSTATS_NTASKS_SELF,
+  XSTATS_NTASKS_LOCAL,
+  XSTATS_NTASKS_REMOTE,
+  XSTATS_SIZE,
+} xstats_t;
+#endif
+
 #ifdef GOMP_USE_XPERFLOG
 #define XPERFLOG_MAX_EVENTS 1<<27 // 128MB events
 // lets use bit 10 to indicate if the event is a sample event
 #define XPERF_END_SHIFT 5
-#define LEVENT(a) ((a)&((1 << XPERF_END_SHIFT) - 1))
-#define HEVENT(a) ((a)>> XPERF_END_SHIFT)
+#define LEVENT(a) ((a) & ((1 << XPERF_END_SHIFT) - 1))
+#define HEVENT(a) ((a) & (~((1 << XPERF_END_SHIFT) -1)))
 typedef enum xperf_event_type{
 /**
  * Below is the event types with/without sample
@@ -962,10 +970,10 @@ typedef struct xperflog_cell {
   xperf_type_t event; // event type
   unsigned long long hfref; // frame reference number for highbit event
   unsigned long long lfref; // frame reference number for lowbit event
-  long long sample; // sample
+  long long sample_qsize; // sample queue size
+  long long value; // value we want
 } xperflog_cell_t
 __attribute__((aligned(64)));
-
 
 typedef struct xperflog {
   unsigned long long frefc[XPERF_N_EVENTS]; // frame refernce counters
@@ -974,17 +982,19 @@ typedef struct xperflog {
   unsigned int last_q;
   long long ssum; // sample sum
   char *xperflog_path;
-  char filename[64]; // log file name
+  char filename[256]; // log file name
   void *fp; // use void * instead of FILE * to avoid including stdio.h here
 
   int tid; // thread id
   int generation;
   bool is_stalling; // is stalling
   // should flush then reinit after each team barrier
+
 } xperflog_t
 __attribute__((aligned(64)))
 ;
 #endif // GOMP_USE_XPERFLOG
+
 #endif // GOMP_USE_XQUEUE
 
 /* This structure contains all data that is private to libgomp and is
@@ -1029,7 +1039,7 @@ struct gomp_thread
   rws_t rws;
 #endif // XTASK_RANDOM_WS
 
-#ifdef XTASK_RR_PUSH
+#if defined(XTASK_STATS) || defined(XTASK_RR_PUSH)
 
   int nvictims;
   int local_prob;
@@ -1053,7 +1063,7 @@ struct gomp_thread
 
 #ifdef XTASK_STATS
 
-  xtask_stats_t xstats;
+  xstats_t xstats[XSTATS_SIZE];
   
 #endif  // XTASK_STATS
 
@@ -1306,8 +1316,8 @@ extern void xflag_init(struct gomp_thread *thr);
 extern void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs);
 // extern void xflag_build_tree(struct xflag *, int, int);
 // extern void xflag_optimize_tree(struct xflag *);
-#ifdef XTASK_RR_PUSH
-extern void rr_get_env_vars();
+#if defined(XTASK_STATS) || defined(XTASK_RR_PUSH)
+extern void get_env_vars();
 #endif
 
 #ifdef GOMP_USE_XPERFLOG
