@@ -147,7 +147,7 @@ static inline void send_reqs(){
 	for(int i = 0; i < nvictims; i++){
 		unsigned prob = myrand() & 0xFF;
 		if(prob < rws->prob){
-			while((vtid = ((myrand() % rws->ncores_numa) + leader)) == mytid);
+			while((vtid = ((myrand() % rws->ncores_numa) + leader)) == mytid || vtid >= nthreads);
 			// local steal, vtid = thr->nz_leader
 		}else{
 			while((vtid = myrand() % nthreads) == mytid);
