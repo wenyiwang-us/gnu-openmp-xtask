@@ -148,11 +148,19 @@ static inline void send_reqs(){
 	#endif
 	for(int i = 0; i < nvictims; i++){
 		unsigned prob = myrand() & 0xFF;
-		while((vtid = myrand() % nthreads) == mytid);
 		if(prob < local_prob){
-			vtid = vtid % thr->ncores_numa;
-			vtid = nz_leader + vtid;
+			while((vtid = ((myrand() % thr->ncores_numa) + nz_leader)) == mytid || vtid >= nthreads);
+			// local steal, vtid = thr->nz_leader
+		}else{
+			while((vtid = myrand() % nthreads) == mytid);
 		}
+
+
+		// while((vtid = myrand() % nthreads) == mytid);
+		// if(prob < local_prob){
+		// 	vtid = vtid % thr->ncores_numa;
+		// 	vtid = nz_leader + vtid;
+		// }
 
 		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
 		rrpush_t *vrrpush = &vthr->rrpush;
