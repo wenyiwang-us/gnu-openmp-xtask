@@ -389,7 +389,14 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	if(thr->use_xq && thr->td_task_q == NULL){
 		// Only when first team_start will call this
 		get_env_vars();
+		#ifdef XTASK_RR_PUSH
 		xtask_debug(0, 0, "XTASK-Redirect-Push: N_VICTIMS=%d, STEAL_DIVIDER=%d, LOCAL_PROB=%d, NWAITS=%d, NCORES_NUMA=%d\n", thr->nvictims, thr->steal_divider, thr->local_prob, thr->nwaits, thr->ncores_numa);
+		#endif
+		
+		#ifdef XTASK_STATS
+		xtask_debug(0, 0, "XTASK STATS enabled.\n");
+		#endif
+
 	}
 #endif
 	if(thr->use_xq && thr->td_task_q == NULL)

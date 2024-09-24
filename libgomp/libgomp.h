@@ -74,8 +74,8 @@
 #endif
 #define GOMP_USE_XQUEUE 1
 #define XTASK_RR_PUSH 1 // random redirect push
-// #define XTASK_RR_STATS 1 // random redirect stats
-// #define XTASK_STATS 1
+#define XTASK_RR_STATS 1 // random redirect stats
+#define XTASK_STATS 1
 // #define GOMP_USE_XPERFLOG 1
 // #define XTASK_RANDOM_BWS 1 // random batch redirected workstealing
 // #define XTASK_ENABLE_WS_STATS 1
