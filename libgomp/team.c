@@ -109,16 +109,17 @@ gomp_thread_start (void *xdata)
 
 #ifdef GOMP_USE_XQUEUE
 	thr->use_xq = data->use_xq;
+#if defined(XGOMP_NARP) || defined(XGOMP_NAWS)
+	// TODO: This could be a bottleneck if they contend?
+	// But maybe not since the thread call is also sequential.
+	if(thr->use_xq)
+		xgomp_getenv();
+#endif // XGOMP_NARP || XGOMP_NAWS
 	if(thr->use_xq && thr->td_task_q == NULL)
 	  	gomp_alloc_task_q(thr);
-
-#ifdef XTASK_RWS
-if(thr->use_xq)
-	xtask_get_env();
-#endif
-#ifdef GOMP_USE_XPERFLOG
+#ifdef XGOMP_PLOG
 	xperflog_init();
-#endif // GOMP_USE_XPERFLOG
+#endif // XGOMP_PLOG
 #endif // GOMP_USE_XQUEUE
 
 
@@ -365,30 +366,6 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
   task = thr->task;
   icv = task ? &task->icv : &gomp_global_icv;
 
-#ifdef GOMP_USE_XQUEUE
-	// team->use_xq = true; // default to true
-	// thr->use_xq = flags & 32;
-	thr->use_xq = 1;
-	xtask_debug(0, 0, "XTASK v.1.6, nthreads=%d, use_xq=%d, nested=%d, level=%d.", nthreads, thr->use_xq, nested, thr->ts.level);
-  	gomp_num_task_queues = nthreads;
-	#ifdef XTASK_RWS
-	bool taskq_allocated = false; // this flag is further used for get_env
-	#endif 
-	if(thr->use_xq && thr->td_task_q == NULL){
-		gomp_alloc_task_q(thr);
-		#ifdef XTASK_RWS
-		taskq_allocated = true;
-		#endif
-	}
-  		
-#ifdef GOMP_USE_XPERFLOG
-	xtask_debug(0, 0, "XPERFLOG v1 enabled.\n");
-	GOMP_ATOMIC_ST_REL(&team->xperflog_awaited, nthreads);
-	xperflog_init();
-#endif // GOMP_USE_XPERFLOG
-
-#endif // GOMP_USE_XQUEUE
-
   if (__builtin_expect (gomp_places_list != NULL, 0) && thr->place == 0)
     {
       gomp_init_affinity ();
@@ -433,16 +410,46 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
   team->implicit_task[0].icv.nthreads_var = nthreads_var;
   team->implicit_task[0].icv.bind_var = bind_var;
 
+#ifdef GOMP_USE_XQUEUE
+	// team->use_xq = true; // default to true
+	// thr->use_xq = flags & 32;
+	thr->use_xq = 1;
+#if !defined(XGOMP_NARP) && !defined(XGOMP_NAWS)
+	xtask_debug(0, 0, "XGOMP v3.0, nthreads=%d, use_xq=%d, nested=%d, level=%d.", nthreads, thr->use_xq, nested, thr->ts.level);
+#endif
+  	gomp_num_task_queues = nthreads;
+#if defined(XGOMP_NARP) || defined(XGOMP_NAWS)
+	if(thr->use_xq)
+	{
+		xgomp_getenv();
+#if defined(XGOMP_NARP)
+		xtask_debug(0, 0, "XGOMP-NARP v%s: NThreads=%d, use_xq=%d, nested=%d, level=%d, N_VICTIMS=%d, NSTEALS=%d, NWAITS=%d, NCORES_NUMA=%d, LOCAL_PROB=%d.", 
+		XGOMP_VERSION, nthreads, thr->use_xq, nested, thr->ts.level, thr->wsd.nvictims, thr->wsd.nsteals, thr->wsd.nwaits, thr->wsd.ncores_numa, thr->wsd.nlprob);
+#else
+		xtask_debug(0, 0, "XGOMP-NAWS v%s: NThreads=%d, use_xq=%d, nested=%d, level=%d, N_VICTIMS=%d, NSTEALS=%d, NWAITS=%d, NCORES_NUMA=%d, LOCAL_PROB=%d.", 
+		XGOMP_VERSION, nthreads, thr->use_xq, nested, thr->ts.level, thr->wsd.nvictims, thr->wsd.nsteals, thr->wsd.nwaits, thr->wsd.ncores_numa, thr->wsd.nlprob);
+#endif
+	}
+#endif // XGOMP_NARP || XGOMP_NAWS
+	if(thr->use_xq && thr->td_task_q == NULL)
+	{
+		gomp_alloc_task_q(thr);
+	}
+
+  		
+#ifdef XGOMP_PLOG
+	xtask_debug(0, 0, "XPERFLOG v1 enabled.\n");
+	GOMP_ATOMIC_ST_REL(&team->xperflog_awaited, nthreads);
+	xperflog_init();
+#endif // XGOMP_PLOG
+
+#endif // GOMP_USE_XQUEUE
+
   if (nthreads == 1)
     return;
 
   i = 1;
-#if defined(XTASK_RWS) && defined(GOMP_USE_XQUEUE)
-	if(thr->use_xq && taskq_allocated){
-		xtask_get_env();
-		xtask_debug(0, 0, "XTASK_RWS: N_VICTIMS=%d, NSTEALS=%d, NWAITS=%d, NCORES_NUMA=%d, LOCAL_PROB=%d.", thr->rws.nvictims, thr->rws.nsteals, thr->rws.nwaits, thr->rws.ncores_numa, thr->rws.prob);
-	}
-#endif
+
 
   if (__builtin_expect (gomp_places_list != NULL, 0))
     {

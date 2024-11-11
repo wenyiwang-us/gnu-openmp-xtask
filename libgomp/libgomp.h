@@ -72,11 +72,31 @@
 #ifdef HAVE_ATTRIBUTE_VISIBILITY
 # pragma GCC visibility push(hidden)
 #endif
-#define GOMP_USE_XQUEUE 1
-// #define GOMP_USE_XPERFLOG 1
-#define XTASK_RWS 1 // random work stealing
 
-// #define ENABLE_WSSTATS 1 // xtask performance statistics
+// use xqueue
+#define GOMP_USE_XQUEUE 1
+#define XGOMP_VERSION "3.0"
+
+#if defined(GOMP_USE_XQUEUE)
+
+#define XGOMP_NAWS 1 // enable numa-aware work stealing
+#define XGOMP_NARP 1 // enable numa-aware redirect push
+#define XGOMP_PLOG 1 // enable performance logging
+// #define XGOMP_PSTATS 1 // enable performance statistics
+
+#endif
+
+/* By default, XGOMP_NAWS is enabled if both are enabled */
+#ifdef XGOMP_NAWS 
+
+#undef XGOMP_NARP
+
+#endif
+
+// obsolete vars
+// #define XGOMP_PLOG 1
+
+// #define XGOMP_PSTATS 1 // xtask performance statistics
 // #define ENABLE_PERFLOG 1 // xtask performance logging
 
 
@@ -657,11 +677,11 @@ struct gomp_task
      are satisfied.  */
   bool parent_depends_on;
 #ifdef GOMP_USE_XQUEUE
-#ifdef ENABLE_WSSTATS
+#ifdef XGOMP_PSTATS
   unsigned int src_tid; // source thread id that instantiated this task, for ws we are curious about its locality
 #endif
   unsigned long td_incomplete_child_tasks;
-#ifdef GOMP_USE_XPERFLOG
+#ifdef XGOMP_PLOG
   unsigned long long task_len;
   unsigned long long task_id;
 #endif
@@ -772,7 +792,7 @@ struct gomp_team
 
   /* This barrier is used for most synchronization of the team.  */
   gomp_barrier_t barrier;
-#if defined(GOMP_USE_XQUEUE) && defined(GOMP_USE_XPERFLOG)
+#if defined(GOMP_USE_XQUEUE) && defined(XGOMP_PLOG)
   volatile int xperflog_awaited;
 #endif
 
@@ -805,54 +825,18 @@ struct gomp_team
   struct gomp_task implicit_task[];
 };
 
+
+// xqueue defines
 #ifdef GOMP_USE_XQUEUE
+
 #define TASK_DEQUE_SIZE(td) ((td)->td_deque_size)
 #define TASK_DEQUE_MASK(td) ((td)->td_deque_size - 1)
 #define INITIAL_TASK_BITS 5
 #define INITIAL_TASK_DEQUE_SIZE (1 << INITIAL_TASK_BITS)
-
 // Simple lockless thread messageing mechanism, messages can be dropped.
 #define MSG_TID2REQ(a) ((uint64_t)(a) << 40) // convert tid to request
 #define MSG_REQ2ROUND(a) ((a) & (uint64_t)((1ULL << 40) - 1)) // convert request to round
 #define MSG_REQ2TID(a) ((unsigned int)((a) >> 40)) // convert request to tid
-
-
-
-/**
- * XWS 
- * TODO: 
- *  XBATCH_SIZE should be a DEQUE_SIZE >> n, where n is an arbitrary number. 
- *  Note the DEQUEU_SIZE here is the size of each queue, not the entire queues.
- *  Enlarge my_qsize to several times bigger, my_qsize = DEQUE_SIZE * n * m
- * 
-*/
-
-#ifdef XTASK_RANDOM_WS
-// Work stealing requests
-#define WS_TID2REQ(a) ((uint64_t)(a) << 40) // convert tid to request
-#define WS_REQ2ROUND(a) ((a) & (uint64_t)((1ULL << 40) - 1)) // convert request to round
-#define WS_REQ2TID(a) ((int)((a) >> 40)) // convert request to tid
-
-#define RWS_STEAL_PENDING 0
-#define RWS_STEAL_SENT 1
-#define RWS_STEAL_FAILED 2
-#define RWS_BATCH_SIZE 8
-enum rwsflag{
-  RWS_INIT_VAL = 0,
-  RWS_STEALING = 1,
-  RWS_REQ_RECEIVED = 2,
-
-};
-
-typedef struct rws{
-  volatile uint64_t round;
-  volatile uint64_t req;
-  enum rwsflag flag;
-  int batch_size;
-  int victims[RWS_BATCH_SIZE];
-} rws_t;
-
-#endif
 
 /* This structure contains task queue for xqueue implementation. */
 struct gomp_taskq{
@@ -860,23 +844,25 @@ struct gomp_taskq{
   unsigned int td_deque_head; // head of the queue
   unsigned int td_deque_tail; // tail of the queue
 
-// #ifdef GOMP_USE_XWS
-/**
- * XWS related fields.
-*/
+  /**
+   * Only used when stats/log is enabled
+   */
+  #if defined(XGOMP_PLOG) || defined(XGOMP_PSTATS)
   unsigned long long nin; // number of tasks pushed in
   unsigned long long nout; // number of tasks popped out 
-// #endif // GOMP_USE_XWS
+  #endif
 };
 
 /* This structure is used for tree barreir sync, and detect barrier termination*/
 #define XFLAG_TREE_DEGREE 2
-enum xbar_state{
+enum xbar_state
+{
   XFLAG_STATE_RUNNING,
   XFLAG_STATE_DONE
 };
 
-struct xflag{
+struct xflag
+{
   struct gomp_thread *thr;
   int nchild;
   struct xflag *parent;
@@ -889,110 +875,37 @@ struct xflag{
 }
 __attribute__((aligned(64)));
 
-#ifdef XTASK_SWS // simple workstealing
+#ifdef XGOMP_PSTATS
+typedef enum xstats_type{
+  // xqueue related
+  STATS_NTASK_PUSHED, // static push
+  STATS_NTASK_NOT_PUSHED, // static push
 
-#define HIGH_LOAD (INITIAL_TASK_DEQUE_SIZE * 4 / 8)
-#define LOW_LOAD (INITIAL_TASK_DEQUE_SIZE * 1 / 8)
+  // task related, no matter what approach
+  STATS_NTASK_EXEC_SELF, // task executed by self
+  STATS_NTASK_EXEC_LOCAL, // task executed locally
+  STATS_NTASK_EXEC_REMOTE, // task executed by remote
 
+  // ws related
+#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
+  STATS_REQ_SENT, // number of requests sent
+  STATS_REQ_HANDLED, // number of requests handled
+  STATS_NTASK_STOLEN_SELF, // number of tasks stolen by self
+  STATS_NTASK_STOLEN_LOCAL, // number of tasks stolen locally
+  STATS_NTASK_STOLEN_REMOTE, // number of tasks stolen remotely
+ #endif
 
-#define WS_REQ_SENT 0
-#define WS_REQ_FAILED 1
-#define WS_REQ_PENDING 2
-
-// push tasks related
-#define WS_TASK_NOT_PUSHED 0
-#define WS_TASK_PUSHED 1
-
-
-
-enum wsflag{
-WS_INITIAL = 0,
-WS_STEALING = 1,
-};
-typedef struct wsload_info{
-  long long high_load;
-  long long low_load;
-} ws_load_info_t;
-
-typedef struct ws_info{
-  ws_load_info_t info;
-  volatile uint64_t round;
-  volatile uint64_t req;
-  volatile long long load; // updated by thief or me after push; ok to have race
-  int last_thr;
-  unsigned long last_qid;
-  enum wsflag flag;
-  // long long *loads;
-} wsi_t __attribute__((aligned(64)));
-
+#if defined(XGOMP_NARP)
+  STATS_NARP_SUCCESS, // number of NARP success
+  STATS_NARP_FAIL,
 #endif
 
+  STATS_SIZE
+} xstats_type_t;
 
-#ifdef XTASK_LLWS
-/**
- * XWS related fields.
-*/
+#endif // XGOMP_PSTATS
 
-#define XWS_BATCH_SIZE 8
-
-#define XWS_TID_TO_HIGH_BITS(a) ((uint64_t)(a) << 40)
-#define XWS_REQ_TO_ROUND(a) ((a) & (uint64_t)((1ULL << 40) - 1))
-#define XWS_REQ_TO_TID(a) ((int)((a) >> 40))
-
-
-#define XWS_VERY_LOW 1 // an arbitrary number
-#define XWS_LOW ((INITIAL_TASK_DEQUE_SIZE >> 2)) // an arbitrary number
-#define XWS_HIGH ((INITIAL_TASK_DEQUE_SIZE * 3 / 8)) // an arbitrary number
-
-enum xws_flag{
-  XWS_INIT_VAL = 0,
-  XWS_STEALING = 1,
-
-  XWS_TASK_QUEUE_FULL = 2,
-};
-
-typedef struct load_state{
-  unsigned very_low; // > 0
-  unsigned low;
-  unsigned high;
-} load_state_t __attribute__((aligned(64)));
-
-typedef struct load_info_cell{
-  volatile long long ldi; // load index
-  volatile bool visited;
-} load_info_cell_t;
-
-typedef struct load_info{
-  int qid; // current qid of xq, owner: me
-  int last_updated_tid; // last updated tid, owner: me
-  long long tsum; // total accumulated sum of tasks. owner: me
-  long long *tsums; // total prefix sum of tasks owner: me
-  volatile load_info_cell_t *lds; // loads, ower: all
-} load_info_t __attribute__((aligned(64)));
-
-typedef struct xws {
-  unsigned batch_size; // batch size of requests sent at each round; init early
-  load_state_t ld_states; // load states, init early
-  enum xws_flag flag; // flag, owner: me
-  unsigned num_tries; // number of tries, owner: me
-  unsigned nreqs; // number of out requests/victims: owner: me
-  int last_req_qid;
-  volatile uint64_t round; // accssed by all threads, owner: all
-  volatile uint64_t req; // accessed by all threads, owner: all
-  int victims[XWS_BATCH_SIZE]; // victims I steal from.
-  load_info_t ld_info; // load info
-    // {idx, tsum, tsums, lds {idx, flag}}
-
-  // debug usage
-  unsigned long long nops; // number of operations
-} xws_t __attribute__((aligned(64)));
-
-
-#endif // XTASK_LLWS
-
-#ifdef XTASK_RWS // random workstealing
-
-
+#if defined(XGOMP_NAWS) || defined(XGOMP_NARP) 
 
 #define NVICTIMS 4
 #define NSTEALS 8
@@ -1000,25 +913,38 @@ typedef struct xws {
 #define NCORES_NUMA 24
 #define LOCAL_STEAL_PROB 256
 
-struct rws{
+#ifdef XGOMP_NARP
+typedef enum narp_flag{
+  NARP_IDLE = 0,
+  NARP_HANDLING_REQ = 1,
+} narp_flag_t;
+#endif
+
+// Work Stealing Data, including ws related stats
+struct wsd{
+  // TODO: Need to think and optimize to address false sharing
   uint64_t round;
   uint64_t req;
   int nvictims; // number of victims per req
   int nsteals; // steal per request
   int nwaits; // waiting loops
+  int nlprob; // probability of sending to NUMA-local core 
+  int leader; // numa zone leader
+  
+  // TODO: this may be changed to cater to more general NUMA cases
+  // e.g. NUMA topology, etc.
   int ncores_numa; // number of cores per numa zone
-  int prob;
-  int leader; // leader
 
-  #ifdef XTASK_STATS
-  unsigned long long nstolen;
-  #endif
+#ifdef XGOMP_NARP
+  int redirect_tid; // -1 means no redirect
+  int nredirect; // current number of redirects
+  narp_flag_t flag; // NARP state flag
+#endif
 };
 
+#endif // XGOMP_NAWS || XGOMP_NARP
 
-#endif // XTASK_RWS
-
-#ifdef GOMP_USE_XPERFLOG
+#ifdef XGOMP_PLOG
 #define XPERFLOG_MAX_EVENTS 1<<27 // 128MB events
 // lets use bit 10 to indicate if the event is a sample event
 #define XPERF_END_SHIFT 5
@@ -1079,30 +1005,7 @@ typedef struct xperflog {
 } xperflog_t
 __attribute__((aligned(64)))
 ;
-#endif // GOMP_USE_XPERFLOG
-
-#ifdef ENABLE_WSSTATS
-// What do we want to measure?
-typedef enum wsstats_type{
-  // task related
-  WSSTATS_NTASK_PUSHED,
-  WSSTATS_NTASK_NOT_PUSHED,
-  // task locality related
-  WSSTATS_NTASK_EXEC_LOCAL,
-  WSSTATS_NTASK_EXEC_SELF,
-  WSSTATS_NTASK_EXEC_REMOTE,
-  // ws, req related
-  WSSTATS_NREQ_SENT,
-  WSSTATS_NREQ_HANDLED,
-  
-  // ws, task related
-  WSSTATS_NTASK_STOLEN_LOCAL,
-  WSSTATS_NTASK_STOLEN_REMOTE,
-  WSSTATS_SIZE,
-} wsstats_type_t;
-
-#endif
-
+#endif // XGOMP_PLOG
 #endif // GOMP_USE_XQUEUE
 
 /* This structure contains all data that is private to libgomp and is
@@ -1136,19 +1039,26 @@ struct gomp_thread
   bool use_xq; // use xq or not, default is yes, when incompat clauses appeared, will use default GNU tasking implementation
   struct xflag xflag;
 
-#ifdef XTASK_RWS
+/* Thread's Perflog data structure*/
+#ifdef XGOMP_PLOG
 
-  struct rws rws;
-
-#endif 
-
-#ifdef GOMP_USE_XPERFLOG
   struct xperflog xperflog;
-#endif // GOMP_USE_XPERFLOG
 
-#ifdef ENABLE_WSSTATS
-  unsigned long long wsstats[WSSTATS_SIZE];
-#endif
+#endif // XGOMP_PLOG
+
+/* Thread's Perfstats data structure*/
+#ifdef XGOMP_PSTATS
+
+  unsigned long long pstats[STATS_SIZE];
+
+#endif // XGOMP_PSTATS
+
+/* Thread's Work Stealing Data structure*/
+#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
+
+  struct wsd wsd; // work stealing data
+
+#endif // XGOMP_NAWS || XGOMP_NARP
 
 #endif // GOMP_USE_XQUEUE
   /* This semaphore is used for ordered loops.  */
@@ -1395,7 +1305,7 @@ extern void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs);
 // extern void xflag_build_tree(struct xflag *, int, int);
 // extern void xflag_optimize_tree(struct xflag *);
 
-#ifdef GOMP_USE_XPERFLOG
+#ifdef XGOMP_PLOG
 #include <x86intrin.h>
 extern void xperflog_init();
 extern void xperflog_wait(); // all threads wait for current dump to finish.
@@ -1403,10 +1313,11 @@ extern void xperflog_record(xperf_type_t, unsigned long long, unsigned long long
 extern void xperflog_dump(struct gomp_thread *);
 extern void xperflog_reset(struct gomp_thread *);
 extern void xperflog_dump_reset();
-#endif // GOMP_USE_XPERFLOG
+#endif // XGOMP_PLOG
 
-#ifdef XTASK_RWS
-extern void xtask_get_env();
+#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
+// #include <stdio.h>
+extern void xgomp_getenv(); // get & set environment variables
 #endif
 
 #endif // GOMP_USE_XQUEUE
