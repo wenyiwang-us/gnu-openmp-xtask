@@ -159,9 +159,6 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
     // flag of current thread is reinit to the right state.
     xflag_reinit(thr, state);
    
-  #ifdef GOMP_USE_XPERFLOG
-    // xperflog_dump_reset();
-  #endif // GOMP_USE_XPERFLOG
     return;
   }else{ // if not using xq
   #endif // GOMP_USE_XQUEUE
