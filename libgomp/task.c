@@ -899,20 +899,8 @@ void xomp_perflog_dump(void){
 		xtask_debug(0, 0, "Dump PERFLOG to: %s", thr->xperflog.xperflog_path);
 	xperflog_dump(thr);
 	#else
-	#ifdef XTASK_STATS
-	if(thr->ts.team_id == 0){
-		unsigned long long nstolen = 0;
-		for(int i = 0; i < thr->ts.team->nthreads; i++){
-			nstolen += thr->thread_pool->threads[i]->wsd.nstolen;
-		}
-	xtask_debug(0, 0, "xstats: nstolen=%llu", nstolen);
-	}
-
-	#else
 	if(thr->ts.team_id == 0)
-		xtask_debug(0, 0, "xperflog - dump: perflog is not enabled.");
-
-	#endif // XTASK_STATS
+		xtask_debug(0, 0, "PLOG: Perflog is not enabled.");
 	#endif // XGOMP_PLOG
 
 	#ifdef XGOMP_PSTATS
@@ -926,10 +914,12 @@ void xomp_perflog_dump(void){
 				sum[j] += t->pstats[j];
 			}
 		}
+		unsigned long long ntask_total = sum[STATS_NTASK_PUSHED] + sum[STATS_NTASK_NOT_PUSHED];
 		
-		xtask_debug(0, 0, "WSTATS: "
+		xtask_debug(0, 0, "PSTATS: "
 		"ntask_pushed=%llu,"
 		"ntask_not_pushed=%llu,"
+		"ntask_total=%llu,"
 		"ntask_exec_self=%llu,"
 		"ntask_exec_local=%llu,"
 		"ntask_exec_remote=%llu,"
@@ -944,10 +934,12 @@ void xomp_perflog_dump(void){
 		#endif
 		sum[STATS_NTASK_PUSHED],
 		sum[STATS_NTASK_NOT_PUSHED],
+		ntask_total,
 		sum[STATS_NTASK_EXEC_SELF],
 		sum[STATS_NTASK_EXEC_LOCAL],
-		sum[STATS_NTASK_EXEC_REMOTE],
+		sum[STATS_NTASK_EXEC_REMOTE]
 		#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
+		,
 		sum[STATS_REQ_SENT],
 		sum[STATS_REQ_HANDLED],
 		sum[STATS_NTASK_STOLEN_SELF],
@@ -2501,7 +2493,7 @@ while(1)
 				xperflog_record(XPERF_TASK_END | XPERF_BAR, task_fref, bar_fref); // task end can be used to encapsulate the task
 				#endif // XGOMP_PLOG
 
-#ifdef XGOMP_PSTATS
+#if defined(XGOMP_PSTATS) && (defined(XGOMP_NAWS) || defined(XGOMP_NARP))
 				/* PSTATS checks task locality */
 				if(child_task->src_tid >= numa_start && child_task->src_tid < numa_end)
 				{
@@ -2879,7 +2871,7 @@ GOMP_taskwait (void)
 					xperflog_record(XPERF_TASK_END | XPERF_TASKWAIT, task_fref, taskwait_fref); // task end can be used to encapsulate the task
 #endif // XGOMP_PLOG
 
-#ifdef XGOMP_PSTATS
+#if defined(XGOMP_PSTATS) && (defined(XGOMP_NAWS) || defined(XGOMP_NARP))
 					/* PSTATS checks task locality */
 					if(child_task->src_tid >= numa_start && child_task->src_tid < numa_end)
 					{

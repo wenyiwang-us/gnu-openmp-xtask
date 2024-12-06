@@ -82,7 +82,7 @@
 // #define XGOMP_NAWS 1 // enable numa-aware work stealing
 // #define XGOMP_NARP 1 // enable numa-aware redirect push
 // #define XGOMP_PLOG 1 // enable performance logging
-// #define XGOMP_PSTATS 1 // enable performance statistics
+#define XGOMP_PSTATS 1 // enable performance statistics
 
 #endif
 
