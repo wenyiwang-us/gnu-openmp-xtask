@@ -449,6 +449,9 @@ gomp_push_task(struct gomp_task *task)
 #ifdef XGOMP_PSTATS
 		thr->pstats[STATS_NTASK_PUSHED]++;
 #endif // XGOMP_PSTATS
+		
+		if(thr->pstats[STATS_NTASK_PUSHED] < 16384)
+			xtask_debug(0, 0, "Task pushed=%llu, last_q=%ld", thr->pstats[STATS_NTASK_PUSHED], last_q);
 		if (thr->num_queues > 1)
 		{
 			last_q++;
@@ -457,6 +460,7 @@ gomp_push_task(struct gomp_task *task)
 			else
 				thr->last_q = 0;
 		}
+
 		return TASK_SUCCESSFULLY_PUSHED;
 };
 

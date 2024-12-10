@@ -109,6 +109,7 @@ gomp_thread_start (void *xdata)
 
 #ifdef GOMP_USE_XQUEUE
 	thr->use_xq = data->use_xq;
+	// xtask_debug(0, 0, "Task pushed=%llu", thr->pstats[STATS_NTASK_PUSHED]);
 #if defined(XGOMP_NARP) || defined(XGOMP_NAWS)
 	// TODO: This could be a bottleneck if they contend?
 	// But maybe not since the thread call is also sequential.
