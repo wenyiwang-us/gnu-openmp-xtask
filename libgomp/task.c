@@ -173,7 +173,7 @@ static inline void send_reqs()
 			vwsd->req = MSG_TID2REQ(mytid) | vwsd->round;
 			/* PSTATS */
 			#ifdef XGOMP_PSTATS
-			thr->pstats[STATS_REQ_SENT]++;
+			thr->pstats[STATS_DLB_NREQ_SENT]++;
 			#endif
 			continue;
 		}
@@ -204,12 +204,11 @@ static inline void migrate_tasks(unsigned long ttid, int n, unsigned long *last_
 		target_thr = thr->thread_pool->threads[ttid];
 
 	gomp_task_t *task = NULL;
+	// try steall n tasks
 	for(int i = 0; i < n; i++)
 	{		
 		// check if target q is full
-
-		while(target_thr->td_task_q[qid]->td_deque[target_thr->td_task_q[qid]->td_deque_head] != NULL)
-		{
+		while(target_thr->td_task_q[qid]->td_deque[target_thr->td_task_q[qid]->td_deque_head] != NULL){
 			num_tries ++;
 			if(num_tries < 25)
 				continue;
@@ -217,15 +216,35 @@ static inline void migrate_tasks(unsigned long ttid, int n, unsigned long *last_
 			break;
 		}
 
-		if(target_full)
-			break;
+		if(target_full){
+			/* PSTATS: dlb req has no steal due to target full */
+			#if defined(XGOMP_PSTATS)
+			if(i == 0){
+				thr->pstats[STATS_DLB_NREQ_TARGET_FULL]++;
+				thr->pstats[STATS_DLB_NREQ_HAS_NO_STEAL]++;
+			}
+			#endif
 
-		// else target not full we can push now
+			break;
+		}
+			
+
+		// target not full, we try steal from aux q for the sake of locality
 		task = (gomp_task_t *) gomp_remove_aux_task(last_qid);
-		if(task == NULL)
-			break;
+		if(task == NULL){
+			/* PSTATS: dlb req has no steal due to src empty */
+			#if defined(XGOMP_PSTATS)
+			if(i == 0){
+				thr->pstats[STATS_DLB_NREQ_SRC_EMPTY]++;
+				thr->pstats[STATS_DLB_NREQ_HAS_NO_STEAL]++;
+			}
+			#endif
 
-		// else push this task
+			break;
+		}
+			
+
+		// target not full, we grab a task, we push to target q
 		struct gomp_taskq *taskq = target_thr->td_task_q[qid];
 
 #if defined(XGOMP_PLOG) || defined(XGOMP_PSTATS)
@@ -238,19 +257,26 @@ static inline void migrate_tasks(unsigned long ttid, int n, unsigned long *last_
 		if(ttid >= numa_start && ttid < numa_end)
 		{
 			if(ttid == mytid)
-				thr->pstats[STATS_NTASK_STOLEN_SELF]++;
+				thr->pstats[STATS_DLB_NTASK_STOLEN_SELF]++;
 			else
-				thr->pstats[STATS_NTASK_STOLEN_LOCAL]++;
+				thr->pstats[STATS_DLB_NTASK_STOLEN_LOCAL]++;
 		}
 		else
 		{
-			thr->pstats[STATS_NTASK_STOLEN_REMOTE]++;
+			thr->pstats[STATS_DLB_NTASK_STOLEN_REMOTE]++;
 		}
+
+		/* PSTATS: dlb has at least one steal, we record the first occurrance. */
+		if(i == 0){
+			thr->pstats[STATS_DLB_NREQ_HAS_STEAL]++;
+		}
+		/* PSTATS: task pushed by dlb (na-ws)*/
+		thr->pstats[STATS_DLB_NTASK_PUSHED]++;
 #endif
 	}
 }
 
-/* NAWS's Handle request*/
+/* NA-WS's Handle request*/
 static inline void handle_reqs(unsigned long *last_qid)
 {
 	struct gomp_thread *thr = gomp_thread();
@@ -262,7 +288,7 @@ static inline void handle_reqs(unsigned long *last_qid)
 		wsd->round++;
 		/* pstats */
 #ifdef XGOMP_PSTATS
-		thr->pstats[STATS_REQ_HANDLED]++;
+		thr->pstats[STATS_DLB_NREQ_HANDLED]++;
 #endif
 	}
 }
@@ -279,7 +305,7 @@ static inline void handle_reqs(unsigned long *last_req_q){
 		wsd->nredirect = 0;
 		wsd->flag = NARP_HANDLING_REQ;
 #ifdef XGOMP_PSTATS
-		thr->pstats[STATS_REQ_HANDLED]++;
+		thr->pstats[STATS_DLB_NREQ_HANDLED]++;
 #endif
 	}
 	// else
@@ -301,8 +327,7 @@ gomp_alloc_task_q(struct gomp_thread *thr)
 	thr->last_q_accessed = 0;
 	
 	thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * (thr->num_queues)); // with xws
-	for (int queue_id = 0; queue_id < thr->num_queues; queue_id++)
-	{
+	for (int queue_id = 0; queue_id < thr->num_queues; queue_id++){
 			thr->td_task_q[queue_id] = (struct gomp_taskq *)gomp_malloc(sizeof(struct gomp_taskq));
 			thr->td_task_q[queue_id]->td_deque = (volatile struct gomp_task **)gomp_malloc(sizeof(struct gomp_task *) * INITIAL_TASK_DEQUE_SIZE);
 			thr->td_deque_size = INITIAL_TASK_DEQUE_SIZE;
@@ -314,8 +339,7 @@ gomp_alloc_task_q(struct gomp_thread *thr)
 			thr->td_task_q[queue_id]->nin = 0;
 			thr->td_task_q[queue_id]->nout = 0;
 #endif
-			for(int i = 0; i < thr->td_deque_size; i++)
-			{
+			for(int i = 0; i < thr->td_deque_size; i++){
 				thr->td_task_q[queue_id]->td_deque[i] = NULL;
 			}
 	}
@@ -335,11 +359,9 @@ gomp_alloc_task_q(struct gomp_thread *thr)
 #endif // XGOMP_NAWS || XGOMP_NARP
 
 #ifdef XGOMP_PSTATS
-	/* Zero out all stats */
+	/* Zero out all stats, maybe redundant */
 	for(int i = 0; i < STATS_SIZE; i++)
-	{
 		thr->pstats[i] = 0;
-	}
 #endif // XGOMP_PSTATS
 
 	return;
@@ -363,16 +385,13 @@ gomp_push_task(struct gomp_task *task)
 
 #ifdef XGOMP_NARP
 	struct wsd *wsd = &thr->wsd;
-	if(wsd->flag == NARP_IDLE)
-	{
+	if(wsd->flag == NARP_IDLE){
 #endif // XGOMP_NARP
 		/* Not using redirect push here */
 		target_tid = gtid + last_q; // starting target tid
 		target_tid = (target_tid > team->nthreads - 1) ? (target_tid - team->nthreads) : target_tid;
 #ifdef XGOMP_NARP
-	}
-	else
-	{
+	}else{
 		/**
 		 * Now the last_q starts from the redirect_tid.
 		 * TODO: An alternative is to not update last_q at the end of this function.
@@ -387,41 +406,88 @@ gomp_push_task(struct gomp_task *task)
 	else
 		target_thr = thr->thread_pool->threads[target_tid]; //ww: does this pointer the same across threads? - seems so
 
-	while (target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL)
-	{
+	/* XQueue: check target queue availability*/
+	while (target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
 		num_tries++;
 		if (num_tries < 25)
 			continue;
 
+/* PSTATS: task not pushed because target queue full */
+#ifdef XGOMP_PSTATS
 #ifdef XGOMP_NARP
-		/**
-		 * Target is full, we reset the flag, redirect_tid and nredirects.
-		 * This task is executed immediately.
-		 * It is considered as a not-pushed task, in addition, it is also considered as a failed steal.
-		 */
+	/**
+	 * Record static push/not push when NA-RP is idle
+	 * Else it is considered as a not-pushed task by the DLB.
+	 * Current request is also considered as failed if it steals none.
+	*/
+	if(wsd->flag == NARP_IDLE){
+		thr->pstats[STATS_STATIC_NTASK_NOT_PUSHED]++;
+	}else{
+		thr->pstats[STATS_DLB_NTASK_NOT_PUSHED]++;
+		if(wsd->nredirect <= 0){
+			// For NA-RP, both no-steal and target-full results from target is full,
+			// we keep no-steal as redundancy for sanity check
+			thr->pstats[STATS_DLB_NREQ_HAS_NO_STEAL]++;
+			thr->pstats[STATS_DLB_NREQ_TARGET_FULL]++;
+		}
+	}
+		
+#else
+		thr->pstats[STATS_STATIC_NTASK_NOT_PUSHED]++;
+#endif // XGOMP_NARP
+#endif // XGOMP_PSTATS
+
+#ifdef XGOMP_NARP
+		/* Reset flags for a new NARP because target is full */
 		wsd->flag = NARP_IDLE;
 		wsd->redirect_tid = -1;
 		wsd->nredirect = 0;
 		wsd->round++;
-#ifdef XGOMP_PSTATS
-		thr->pstats[STATS_NARP_FAIL] ++;
-#endif
 #endif // XGOMP_NARP
 
-#ifdef XGOMP_PSTATS
-		thr->pstats[STATS_NTASK_NOT_PUSHED] ++;
-#endif
 		return TASK_NOT_PUSHED;
 	}
 
+	/* XQueue: task push routine */
 	struct gomp_taskq *task_q = target_thr->td_task_q[last_q];
 #if defined(XGOMP_PLOG) || defined(XGOMP_PSTATS)
-	task_q->nin++; // Will it be reordered by compilers or CPU?. it doesn't matter
+	task_q->nin++; // Doesn't matter if it is reordered by the CPU/compiler
 #endif
 	task_q->td_deque[task_q->td_deque_head] = task;
 	task_q->td_deque_head = (task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
 	target_thr->last_q_accessed = last_q;
 
+/* PSTATS: task pushed */
+#ifdef XGOMP_PSTATS
+#ifdef XGOMP_NARP
+	// NA-RP
+	unsigned long mytid = (unsigned long) thr->ts.team_id;
+	unsigned int numa_start = wsd->leader;
+	unsigned int numa_end = numa_start + wsd->ncores_numa;
+	if(wsd->flag == NARP_IDLE)
+		thr->pstats[STATS_STATIC_NTASK_PUSHED]++; // record na-rp's static task push
+	else{
+		thr->pstats[STATS_DLB_NTASK_PUSHED]++; // record na-rp's dlb task push
+		// TODO: also decide task locality of this stolen task
+		if(target_tid >= numa_start && target_tid < numa_end)
+		{
+			if(target_tid == mytid)
+				thr->pstats[STATS_DLB_NTASK_STOLEN_SELF]++;
+			else
+				thr->pstats[STATS_DLB_NTASK_STOLEN_LOCAL]++;
+		}
+		else
+		{
+			thr->pstats[STATS_DLB_NTASK_STOLEN_REMOTE]++;
+		}
+	}
+		
+#else
+	// XGOMPTB
+	thr->pstats[STATS_STATIC_NTASK_PUSHED]++; // static task push
+#endif // XGOMP_NARP
+#endif // XGOMP_PSTATS
+		
 #ifdef XGOMP_NARP
 	/**
 	 * Reset the flag, redirect_tid and nredirects if
@@ -438,29 +504,20 @@ gomp_push_task(struct gomp_task *task)
 		wsd->redirect_tid = -1;
 		wsd->nredirect = 0;
 		wsd->round++;
+		/* PSTATS: req has steal */
+		#ifdef XGOMP_PSTATS
+		thr->pstats[STATS_DLB_NREQ_HAS_STEAL]++;
+		#endif // XGOMP_PSTATS
 	}
-
-#ifdef XGOMP_PSTATS
-		thr->pstats[STATS_NARP_SUCCESS]++;
-#endif // XGOMP_PSTATS
 #endif // XGOMP_NARP
 
-		/* pstats */
-#ifdef XGOMP_PSTATS
-		thr->pstats[STATS_NTASK_PUSHED]++;
-#endif // XGOMP_PSTATS
-		
-		if(thr->pstats[STATS_NTASK_PUSHED] < 16384)
-			xtask_debug(0, 0, "Task pushed=%llu, last_q=%ld", thr->pstats[STATS_NTASK_PUSHED], last_q);
-		if (thr->num_queues > 1)
-		{
+		if (thr->num_queues > 1){
 			last_q++;
 			if (last_q < thr->num_queues)
 				thr->last_q = last_q;
 			else
 				thr->last_q = 0;
 		}
-
 		return TASK_SUCCESSFULLY_PUSHED;
 };
 
@@ -489,11 +546,10 @@ gomp_remove_aux_task(unsigned long *last_qid)
 
 	task = NULL;
 	struct gomp_taskq *task_q= NULL;
-	if(thr->last_q_accessed > 0)
-	{
+	/* Try pop from last accessed queue */
+	if(thr->last_q_accessed > 0){
 		task_q = thr->td_task_q[thr->last_q_accessed];
-		if (task_q->td_deque[task_q->td_deque_tail] != NULL)
-		{
+		if (task_q->td_deque[task_q->td_deque_tail] != NULL){
 			task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
 			task_q->td_deque[task_q->td_deque_tail] = NULL;
 			task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
@@ -501,13 +557,11 @@ gomp_remove_aux_task(unsigned long *last_qid)
 		}
 			
 	}
-	if(task == NULL)
-	{
-		for(unsigned long queue_id = *last_qid; queue_id > 0; queue_id --)
-		{
+	/* Try pop from last queue */
+	if(task == NULL){
+		for(unsigned long queue_id = *last_qid; queue_id > 0; queue_id --){
 			task_q = thr->td_task_q[queue_id];
-			if (task_q->td_deque[task_q->td_deque_tail] != NULL)
-			{
+			if (task_q->td_deque[task_q->td_deque_tail] != NULL){
 				task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
 				task_q->td_deque[task_q->td_deque_tail] = NULL;
 				task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
@@ -516,14 +570,11 @@ gomp_remove_aux_task(unsigned long *last_qid)
 			}
 		}
 	}
-
-	if(task == NULL)
-	{
-		for(unsigned long queue_id = thr->num_queues - 1; queue_id > *last_qid; queue_id --)
-		{
+	/* Try pop from queue starting from the first queue */
+	if(task == NULL){
+		for(unsigned long queue_id = thr->num_queues - 1; queue_id > *last_qid; queue_id --){
 			task_q = thr->td_task_q[queue_id];
-			if (task_q->td_deque[task_q->td_deque_tail] != NULL)
-			{
+			if (task_q->td_deque[task_q->td_deque_tail] != NULL){
 				task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
 				task_q->td_deque[task_q->td_deque_tail] = NULL;
 				task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
@@ -806,8 +857,6 @@ void xperflog_record(xperf_type_t event, unsigned long long hfref, unsigned long
 	perflog->eidx++;
 }
 
-
-
 void xperflog_wait(){
 	struct gomp_thread *thr = gomp_thread();
 	struct gomp_team *team = thr->ts.team;
@@ -892,11 +941,11 @@ void xperflog_dump_reset(){
 
 /**
  * Interfaces that can be called by the user
- * xomp_perflog_dump: dump the perflog to the file
+ * xomp_perf_dump: dump the perflog to the file
  * xomp_perflog_reset: reset the perflog
 */
 
-void xomp_perflog_dump(void){
+void xomp_perf_dump(void){
 	struct gomp_thread *thr = gomp_thread();
 	#ifdef XGOMP_PLOG
 	if(thr->ts.team_id == 0)
@@ -918,37 +967,58 @@ void xomp_perflog_dump(void){
 				sum[j] += t->pstats[j];
 			}
 		}
-		unsigned long long ntask_total = sum[STATS_NTASK_PUSHED] + sum[STATS_NTASK_NOT_PUSHED];
 		
 		xtask_debug(0, 0, "PSTATS: "
-		"ntask_pushed=%llu,"
-		"ntask_not_pushed=%llu,"
-		"ntask_total=%llu,"
-		"ntask_exec_self=%llu,"
-		"ntask_exec_local=%llu,"
-		"ntask_exec_remote=%llu,"
+		"ntask_total=%llu," // total tasks
+		"ntask_exec_self=%llu," // tasks executed by self/immediately
+		"ntask_exec_local=%llu," // tasks executed by NUMA-local cores/threads
+		"ntask_exec_remote=%llu,"// tasks executed by NUMA-remote cores/threads
+		"ntask_static_pushed=%llu," // static task push
+		"ntask_static_not_pushed=%llu," // static task not push
 		#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
-		"nreq_sent=%llu,"
-		"nreq_handled=%llu,"
-		"ntask_stolen_self=%llu,"
-		"ntask_stolen_local=%llu,"
-		"ntask_stolen_remote=%llu",
-		#else
+		"nreq_dlb_sent=%llu," // number of requests sent
+		"nreq_dlb_handled=%llu," // number requests handled
+		"nreq_dlb_has_steal=%llu," // number of request that results in successful steal
+		"nreq_dlb_has_no_steal=%llu," // number of request that results in no steal
+		"nreq_dlb_target_full=%llu," // number of request fails because the target queue is full
+
+		#if defined(XGOMP_NAWS)
+		"nreq_dlb_src_empty=%llu," // (NA-WS) number of request fails because the source queue is empty
+		#endif // XGOMP_NAWS
+
+		"ntask_dlb_pushed=%llu," // number of tasks pushed by DLB
+		"ntask_dlb_not_pushed=%llu," // number of tasks not pushed by DLB
+
+		"ntask_dlb_stolen_self=%llu," // number of tasks stolen by self
+		"ntask_dlb_stolen_local=%llu," // number of tasks stolen by NUMA-local cores/threads
+		"ntask_dlb_stolen_remote=%llu" // number of tasks stolen by NUMA-remote cores/threads
+		#endif // XGOMP_NAWS || XGOMP_NARP
 		,
-		#endif
-		sum[STATS_NTASK_PUSHED],
-		sum[STATS_NTASK_NOT_PUSHED],
-		ntask_total,
+		sum[STATS_NTASK],
 		sum[STATS_NTASK_EXEC_SELF],
 		sum[STATS_NTASK_EXEC_LOCAL],
-		sum[STATS_NTASK_EXEC_REMOTE]
+		sum[STATS_NTASK_EXEC_REMOTE],
+		// static
+		sum[STATS_STATIC_NTASK_PUSHED],
+		sum[STATS_STATIC_NTASK_NOT_PUSHED]
 		#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
 		,
-		sum[STATS_REQ_SENT],
-		sum[STATS_REQ_HANDLED],
-		sum[STATS_NTASK_STOLEN_SELF],
-		sum[STATS_NTASK_STOLEN_LOCAL],
-		sum[STATS_NTASK_STOLEN_REMOTE]
+		sum[STATS_DLB_NREQ_SENT],
+		sum[STATS_DLB_NREQ_HANDLED],
+		sum[STATS_DLB_NREQ_HAS_STEAL],
+		sum[STATS_DLB_NREQ_HAS_NO_STEAL],
+		sum[STATS_DLB_NREQ_TARGET_FULL],
+
+		#if defined(XGOMP_NAWS)
+		sum[STATS_DLB_NREQ_SRC_EMPTY],
+		#endif // XGOMP_NAWS
+
+		sum[STATS_DLB_NTASK_PUSHED],
+		sum[STATS_DLB_NTASK_NOT_PUSHED],
+
+		sum[STATS_DLB_NTASK_STOLEN_SELF],
+		sum[STATS_DLB_NTASK_STOLEN_LOCAL],
+		sum[STATS_DLB_NTASK_STOLEN_REMOTE]
 		#endif
 		);
 	}
@@ -1517,6 +1587,7 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
 		GOMP_ATOMIC_INC(&task->parent->td_incomplete_child_tasks);
 		#ifdef XGOMP_PSTATS
 		task->src_tid = thr->ts.team_id; // record task source thread id
+		thr->pstats[STATS_NTASK]++; // increment task count
 		#endif
 
 		if(gomp_push_task (task) == TASK_NOT_PUSHED){

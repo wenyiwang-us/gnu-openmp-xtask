@@ -230,7 +230,7 @@ OMP_5.1 {
 XOMP_1.0 {
 	global:
 		xomp_perflog_info;
-		xomp_perflog_dump;
+		xomp_perf_dump;
 };
 
 GOMP_1.0 {

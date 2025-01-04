@@ -75,12 +75,12 @@
 
 // use xqueue
 #define GOMP_USE_XQUEUE 1
-#define XGOMP_VERSION "3.0"
+#define XGOMP_VERSION "24.12.23"
 
 #if defined(GOMP_USE_XQUEUE)
 
-// #define XGOMP_NAWS 1 // enable numa-aware work stealing
-// #define XGOMP_NARP 1 // enable numa-aware redirect push
+#define XGOMP_NAWS 1 // enable numa-aware work stealing
+#define XGOMP_NARP 1 // enable numa-aware redirect push
 // #define XGOMP_PLOG 1 // enable performance logging
 #define XGOMP_PSTATS 1 // enable performance statistics
 
@@ -877,27 +877,40 @@ __attribute__((aligned(64)));
 
 #ifdef XGOMP_PSTATS
 typedef enum xstats_type{
-  // xqueue related
-  STATS_NTASK_PUSHED, // static push
-  STATS_NTASK_NOT_PUSHED, // static push
 
-  // task related, no matter what approach
+  /* GOMP task */
+  STATS_NTASK, // number of tasks
+
+  /* Task execution locality */
   STATS_NTASK_EXEC_SELF, // task executed by self
   STATS_NTASK_EXEC_LOCAL, // task executed locally
   STATS_NTASK_EXEC_REMOTE, // task executed by remote
 
-  // ws related
-#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
-  STATS_REQ_SENT, // number of requests sent
-  STATS_REQ_HANDLED, // number of requests handled
-  STATS_NTASK_STOLEN_SELF, // number of tasks stolen by self
-  STATS_NTASK_STOLEN_LOCAL, // number of tasks stolen locally
-  STATS_NTASK_STOLEN_REMOTE, // number of tasks stolen remotely
- #endif
+  /* XQueue task operations (static) */
+  STATS_STATIC_NTASK_PUSHED, // static push
+  STATS_STATIC_NTASK_NOT_PUSHED, // static not push
 
-#if defined(XGOMP_NARP)
-  STATS_NARP_SUCCESS, // number of NARP success
-  STATS_NARP_FAIL,
+  /* DLB related */
+#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
+
+  /* DLB requests related */
+  STATS_DLB_NREQ_SENT, // number of requests sent
+  STATS_DLB_NREQ_HANDLED, // number of requests handled
+  STATS_DLB_NREQ_HAS_STEAL, // number of requests handled that results in at least one task stolen
+  STATS_DLB_NREQ_HAS_NO_STEAL, // (redundant but for sanity-check) number of requests handled that results in no task stolen (fail = handled - success)
+  STATS_DLB_NREQ_TARGET_FULL, // number of requests handled that results in pushing to target queue full
+  #if defined(XGOMP_NAWS)
+  STATS_DLB_NREQ_SRC_EMPTY, // (NA-WS) number of requests handled that resulg in popping from empty source queue
+  #endif  
+  /* DLB task management operations*/
+  STATS_DLB_NTASK_PUSHED, // number of tasks pushed by dlb
+  STATS_DLB_NTASK_NOT_PUSHED, // number of tasks not pushed by dlb, because target queue is full. always 0 for na-ws
+  // STATS_DLB_NTASK_TARGET_QUEUE_FULL, // number of tasks pushed to a full target queue by dlb
+  
+  /* DLB task locality */
+  STATS_DLB_NTASK_STOLEN_SELF, // number of tasks stolen by self
+  STATS_DLB_NTASK_STOLEN_LOCAL, // number of tasks stolen locally
+  STATS_DLB_NTASK_STOLEN_REMOTE, // number of tasks stolen remotely
 #endif
 
   STATS_SIZE
