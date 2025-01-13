@@ -80,6 +80,19 @@ static gomp_task_t* gomp_remove_my_task();
 static gomp_task_t* gomp_remove_aux_task(unsigned long *);
 
 
+#if defined(XGOMP_PSTATS)
+static inline void pstats_init(){
+	struct gomp_thread *thr = gomp_thread();
+	/* Zero out all stats, maybe redundant */
+	for(int i = 0; i < STATS_SIZE; i++)
+		thr->pstats[i] = 0;
+	thr->ncores_numa = getenv("NCORES_NUMA") == NULL ? NCORES_NUMA : atoi(getenv("NCORES_NUMA"));
+	thr->leader =  thr->ts.team_id / thr->ncores_numa * thr->ncores_numa;
+}
+
+
+#endif // XGOMP_PSTATS
+
 #if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
 // #include <stdio.h>
 void xgomp_getenv(){
@@ -359,9 +372,7 @@ gomp_alloc_task_q(struct gomp_thread *thr)
 #endif // XGOMP_NAWS || XGOMP_NARP
 
 #ifdef XGOMP_PSTATS
-	/* Zero out all stats, maybe redundant */
-	for(int i = 0; i < STATS_SIZE; i++)
-		thr->pstats[i] = 0;
+pstats_init();
 #endif // XGOMP_PSTATS
 
 	return;
@@ -2464,13 +2475,13 @@ void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
 	
 	unsigned long long nwaits = (unsigned long long) thr->wsd.nwaits;
 	unsigned long long nwaited = nwaits;
-	/* pstats */
-#ifdef XGOMP_PSTATS
-	unsigned int numa_start = thr->wsd.leader;
-	unsigned int numa_end = thr->wsd.leader + thr->wsd.ncores_numa;
-#endif // XGOMP_PSTATS
-
 #endif // XGOMP_NAWS || XGOMP_NARP
+	
+/* pstats */
+#ifdef XGOMP_PSTATS
+	unsigned int numa_start = thr->leader;
+	unsigned int numa_end = numa_start + thr->ncores_numa;
+#endif // XGOMP_PSTATS
 
 	unsigned long gtid = (unsigned long)omp_get_thread_num();
 	unsigned int use_own_tasks = 1, new_victim = 0;
@@ -2568,7 +2579,8 @@ while(1)
 				xperflog_record(XPERF_TASK_END | XPERF_BAR, task_fref, bar_fref); // task end can be used to encapsulate the task
 				#endif // XGOMP_PLOG
 
-#if defined(XGOMP_PSTATS) && (defined(XGOMP_NAWS) || defined(XGOMP_NARP))
+// #if defined(XGOMP_PSTATS) && (defined(XGOMP_NAWS) || defined(XGOMP_NARP))
+#if defined(XGOMP_PSTATS)
 				/* PSTATS checks task locality */
 				if(child_task->src_tid >= numa_start && child_task->src_tid < numa_end)
 				{
@@ -2798,13 +2810,12 @@ GOMP_taskwait (void)
 #if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
 	unsigned long long nwaits = (unsigned long long)thr->wsd.nwaits;
 	unsigned long long nwaited = nwaits;
+#endif // XGOMP_NAWS
 	/* pstats */
 #if defined(XGOMP_PSTATS)
-	unsigned int numa_start = thr->wsd.leader;
-	unsigned int numa_end = thr->wsd.leader + thr->wsd.ncores_numa;
+	unsigned int numa_start = thr->leader;
+	unsigned int numa_end = numa_start + thr->ncores_numa;
 #endif // XGOMP_PSTATS
-	
-#endif // XGOMP_NAWS
 	if(__builtin_expect(thr->use_xq, 1))
 	{
 		if (task == NULL)
@@ -2946,7 +2957,8 @@ GOMP_taskwait (void)
 					xperflog_record(XPERF_TASK_END | XPERF_TASKWAIT, task_fref, taskwait_fref); // task end can be used to encapsulate the task
 #endif // XGOMP_PLOG
 
-#if defined(XGOMP_PSTATS) && (defined(XGOMP_NAWS) || defined(XGOMP_NARP))
+// #if defined(XGOMP_PSTATS) && (defined(XGOMP_NAWS) || defined(XGOMP_NARP))
+#if defined(XGOMP_PSTATS)
 					/* PSTATS checks task locality */
 					if(child_task->src_tid >= numa_start && child_task->src_tid < numa_end)
 					{

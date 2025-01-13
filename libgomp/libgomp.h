@@ -79,8 +79,8 @@
 
 #if defined(GOMP_USE_XQUEUE)
 
-#define XGOMP_NAWS 1 // enable numa-aware work stealing
-#define XGOMP_NARP 1 // enable numa-aware redirect push
+// #define XGOMP_NAWS 1 // enable numa-aware work stealing
+// #define XGOMP_NARP 1 // enable numa-aware redirect push
 // #define XGOMP_PLOG 1 // enable performance logging
 #define XGOMP_PSTATS 1 // enable performance statistics
 
@@ -92,6 +92,7 @@
 #undef XGOMP_NARP
 
 #endif
+#define NCORES_NUMA 24
 
 // obsolete vars
 // #define XGOMP_PLOG 1
@@ -1063,6 +1064,8 @@ struct gomp_thread
 #ifdef XGOMP_PSTATS
 
   unsigned long long pstats[STATS_SIZE];
+  unsigned int ncores_numa;
+  unsigned int leader;
 
 #endif // XGOMP_PSTATS
 
