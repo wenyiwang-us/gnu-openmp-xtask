@@ -455,6 +455,15 @@ gomp_push_task(struct gomp_task *task)
 		wsd->nredirect = 0;
 		wsd->round++;
 #endif // XGOMP_NARP
+		if(target_tid == gtid){
+			if (thr->num_queues > 1){
+				last_q++;
+				if (last_q < thr->num_queues)
+					thr->last_q = last_q;
+				else
+					thr->last_q = 0;
+				}
+		}
 
 		return TASK_NOT_PUSHED;
 	}

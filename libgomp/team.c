@@ -415,7 +415,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	// thr->use_xq = flags & 32;
 	thr->use_xq = 1;
 #if !defined(XGOMP_NARP) && !defined(XGOMP_NAWS)
-	xtask_debug(0, 0, "XGOMP v3.0, nthreads=%d, use_xq=%d, nested=%d, level=%d.", nthreads, thr->use_xq, nested, thr->ts.level);
+	xtask_debug(0, 0, "XGOMP v%d, nthreads=%d, use_xq=%d, nested=%d, level=%d.", XGOMP_VERSION, nthreads, thr->use_xq, nested, thr->ts.level);
 #endif
   	gomp_num_task_queues = nthreads;
 #if defined(XGOMP_NARP) || defined(XGOMP_NAWS)
