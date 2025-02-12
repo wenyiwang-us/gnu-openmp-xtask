@@ -75,7 +75,7 @@
 
 // use xqueue
 #define GOMP_USE_XQUEUE 1
-#define XGOMP_VERSION "24.12.23"
+#define XGOMP_VERSION "25.2.6"
 
 #if defined(GOMP_USE_XQUEUE)
 
@@ -1066,6 +1066,7 @@ struct gomp_thread
   unsigned long long pstats[STATS_SIZE];
   unsigned int ncores_numa;
   unsigned int leader;
+  unsigned int gen; // only accessible by pstats.
 
 #endif // XGOMP_PSTATS
 

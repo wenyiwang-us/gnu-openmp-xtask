@@ -84,6 +84,7 @@ static gomp_task_t* gomp_remove_aux_task(unsigned long *);
 static inline void pstats_init(){
 	struct gomp_thread *thr = gomp_thread();
 	/* Zero out all stats, maybe redundant */
+	xtask_debug(0, 0, "pstats_init");
 	for(int i = 0; i < STATS_SIZE; i++)
 		thr->pstats[i] = 0;
 	thr->ncores_numa = getenv("NCORES_NUMA") == NULL ? NCORES_NUMA : atoi(getenv("NCORES_NUMA"));
@@ -972,10 +973,10 @@ void xomp_perf_dump(void){
 		xtask_debug(0, 0, "Dump PERFLOG to: %s", thr->xperflog.xperflog_path);
 	xperflog_dump(thr);
 	#else
-	if(thr->ts.team_id == 0)
-		xtask_debug(0, 0, "PLOG: Perflog is not enabled.");
+	// if(thr->ts.team_id == 0)
+	// 	xtask_debug(0, 0, "PLOG: Perflog is not enabled.");
 	#endif // XGOMP_PLOG
-
+	thr->gen++;
 	#ifdef XGOMP_PSTATS
 	if(thr->ts.team_id == 0)
 	{
@@ -989,6 +990,7 @@ void xomp_perf_dump(void){
 		}
 		
 		xtask_debug(0, 0, "PSTATS: "
+		"gen=%d,"
 		"ntask_total=%llu," // total tasks
 		"ntask_exec_self=%llu," // tasks executed by self/immediately
 		"ntask_exec_local=%llu," // tasks executed by NUMA-local cores/threads
@@ -1014,6 +1016,7 @@ void xomp_perf_dump(void){
 		"ntask_dlb_stolen_remote=%llu" // number of tasks stolen by NUMA-remote cores/threads
 		#endif // XGOMP_NAWS || XGOMP_NARP
 		,
+		thr->gen,
 		sum[STATS_NTASK],
 		sum[STATS_NTASK_EXEC_SELF],
 		sum[STATS_NTASK_EXEC_LOCAL],

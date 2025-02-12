@@ -415,7 +415,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
 	// thr->use_xq = flags & 32;
 	thr->use_xq = 1;
 #if !defined(XGOMP_NARP) && !defined(XGOMP_NAWS)
-	xtask_debug(0, 0, "XGOMP v%d, nthreads=%d, use_xq=%d, nested=%d, level=%d.", XGOMP_VERSION, nthreads, thr->use_xq, nested, thr->ts.level);
+	xtask_debug(0, 0, "XGOMPTB v%s, nthreads=%d, use_xq=%d, nested=%d, level=%d.", XGOMP_VERSION, nthreads, thr->use_xq, nested, thr->ts.level);
 #endif
   	gomp_num_task_queues = nthreads;
 #if defined(XGOMP_NARP) || defined(XGOMP_NAWS)
@@ -1049,6 +1049,11 @@ gomp_team_end (void)
     gomp_fini_work_share (thr->ts.work_share);
 
   gomp_end_task ();
+
+  // XTask: now we force a stats dump. For some internal libraries, it is now diffcult to get stats. 
+  // FIXME: this is a hack, and should be removed in the future.
+  xomp_perf_dump();
+
   thr->ts = team->prev_ts;
 
   if (__builtin_expect (thr->ts.level != 0, 0))
