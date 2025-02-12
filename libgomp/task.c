@@ -456,6 +456,7 @@ gomp_push_task(struct gomp_task *task)
 		wsd->nredirect = 0;
 		wsd->round++;
 #endif // XGOMP_NARP
+		// We move to next queue in case target is full, casuing sequential execution of current thread.
 		if(target_tid == gtid){
 			if (thr->num_queues > 1){
 				last_q++;
