@@ -1,4 +1,4 @@
-# IPDPS '25 — Artifact: Fine-Grained Parallelism via Dynamic Load Balancing
+# IPDPS '25 — Optimizing Fine-Grained Parallelism Through Dynamic Load Balancing on Multi-Socket Many-Core Systems
 
 Source modifications and patch for the paper:
 
@@ -6,6 +6,7 @@ Source modifications and patch for the paper:
 > Wenyi Wang, Maxime Gonthier, Poornima Nookala, Haochen Pan, Ian Foster, Ioan Raicu, Kyle Chard
 > *IEEE IPDPS 2025 (39th International Parallel and Distributed Processing Symposium), Milano, Italy*
 > ArXiv: https://arxiv.org/abs/2502.05293
+> IEEE: https://ieeexplore.ieee.org/document/11078401
 
 ---
 
@@ -20,7 +21,6 @@ libgomp/           Core runtime changes (XQueue, distributed barrier, NUMA load 
 libsanitizer/      One-line build fix for the test environment
 benchmark/         Benchmarks (to be added)
 ipdps-25.patch     Unified diff against GCC 12 base (see below)
-sync.sh            Utility script for syncing libgomp to a remote build host
 ```
 
 ### Key contributions in `libgomp/`
