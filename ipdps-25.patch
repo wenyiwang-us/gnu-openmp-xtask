@@ -1,0 +1,2807 @@
+diff --git a/gcc/c-family/c-omp.cc b/gcc/c-family/c-omp.cc
+index 777cdc65572..865cdefd620 100644
+--- a/gcc/c-family/c-omp.cc
++++ b/gcc/c-family/c-omp.cc
+@@ -1880,6 +1880,9 @@ c_omp_split_clauses (location_t loc, enum tree_code code,
+ 	  break;
+ 	case OMP_CLAUSE_COPYIN:
+ 	case OMP_CLAUSE_NUM_THREADS:
++#ifdef GCC_ENABLE_XQ_COMPAT
++	case OMP_HIDDEN_CLAUSE_USE_XQ: // ww: use_xq fall-thru
++#endif
+ 	case OMP_CLAUSE_PROC_BIND:
+ 	  s = C_OMP_CLAUSE_SPLIT_PARALLEL;
+ 	  break;
+diff --git a/gcc/c/c-typeck.cc b/gcc/c/c-typeck.cc
+index 603b03fe1a5..2a455da42d9 100644
+--- a/gcc/c/c-typeck.cc
++++ b/gcc/c/c-typeck.cc
+@@ -15415,6 +15415,9 @@ c_finish_omp_clauses (tree clauses, enum c_omp_region_type ort)
+ 	case OMP_CLAUSE_IF_PRESENT:
+ 	case OMP_CLAUSE_FINALIZE:
+ 	case OMP_CLAUSE_NOHOST:
++#ifdef GCC_ENABLE_XQ_COMPAT
++  case OMP_HIDDEN_CLAUSE_USE_XQ: // ww: use_xq fall-thru
++#endif
+ 	  pc = &OMP_CLAUSE_CHAIN (c);
+ 	  continue;
+ 
+diff --git a/gcc/cp/pt.cc b/gcc/cp/pt.cc
+index 0af7033589a..ac521a380b9 100644
+--- a/gcc/cp/pt.cc
++++ b/gcc/cp/pt.cc
+@@ -17901,6 +17901,9 @@ tsubst_omp_clauses (tree clauses, enum c_omp_region_type ort,
+ 	case OMP_CLAUSE_INBRANCH:
+ 	case OMP_CLAUSE_NOTINBRANCH:
+ 	case OMP_CLAUSE_PROC_BIND:
++#ifdef GCC_ENABLE_XQ_COMPAT
++  case OMP_HIDDEN_CLAUSE_USE_XQ:// ww: use_xq, fall-thru
++#endif
+ 	case OMP_CLAUSE_FOR:
+ 	case OMP_CLAUSE_PARALLEL:
+ 	case OMP_CLAUSE_SECTIONS:
+diff --git a/gcc/cp/semantics.cc b/gcc/cp/semantics.cc
+index 687fec019d3..9fb13f5b4cf 100644
+--- a/gcc/cp/semantics.cc
++++ b/gcc/cp/semantics.cc
+@@ -8590,6 +8590,9 @@ finish_omp_clauses (tree clauses, enum c_omp_region_type ort)
+ 	case OMP_CLAUSE_IF_PRESENT:
+ 	case OMP_CLAUSE_FINALIZE:
+ 	case OMP_CLAUSE_NOHOST:
++#ifdef GCC_ENABLE_XQ_COMPAT
++	case OMP_HIDDEN_CLAUSE_USE_XQ: // ww: use_xq, fall-thru
++#endif
+ 	  break;
+ 
+ 	case OMP_CLAUSE_MERGEABLE:
+diff --git a/gcc/gimplify.cc b/gcc/gimplify.cc
+index a3aa90262c5..a653672215c 100644
+--- a/gcc/gimplify.cc
++++ b/gcc/gimplify.cc
+@@ -240,6 +240,10 @@ struct gimplify_omp_ctx
+   bool in_for_exprs;
+   int defaultmap[5];
+ };
++#ifdef GCC_ENABLE_XQ_COMPAT
++// ww: use_xq flag
++static bool use_xq = false;
++#endif
+ 
+ static struct gimplify_ctx *gimplify_ctxp;
+ static struct gimplify_omp_ctx *gimplify_omp_ctxp;
+@@ -10755,6 +10759,10 @@ gimplify_scan_omp_clauses (tree *list_p, gimple_seq *pre_p,
+ 	case OMP_CLAUSE_BIND:
+ 	case OMP_CLAUSE_IF_PRESENT:
+ 	case OMP_CLAUSE_FINALIZE:
++	#ifdef GCC_ENABLE_XQ_COMPAT
++	case OMP_HIDDEN_CLAUSE_USE_XQ:
++	// fprintf(stderr, "ww: omp_clause_code=%d, ", OMP_CLAUSE_CODE (c));
++	#endif
+ 	  break;
+ 
+ 	case OMP_CLAUSE_ORDER:
+@@ -11356,6 +11364,14 @@ gimplify_adjust_omp_clauses (gimple_seq *pre_p, gimple_seq body, tree *list_p,
+   tree c, decl;
+   bool has_inscan_reductions = false;
+ 
++#ifdef GCC_ENABLE_XQ_COMPAT
++	fprintf(stderr, "ww: gimplify_adjust_omp_clauses\n");
++ 	fprintf(stderr, "ww: gimplify_adjust_clauses: code=%d, use_xq=%d\n", code, use_xq);
++	if(code == OMP_TASK){
++		// TODO: further we need to identify clauses and disable xq if some clauses are not supported
++		use_xq = 1;
++	}
++#endif
+   if (body)
+     {
+       struct gimplify_omp_ctx *octx;
+@@ -11410,6 +11426,22 @@ gimplify_adjust_omp_clauses (gimple_seq *pre_p, gimple_seq body, tree *list_p,
+ 	    *list_p = c2;
+ 	  }
+     }
++#ifdef GCC_ENABLE_XQ_COMPAT
++ if(code == OMP_PARALLEL && use_xq == 1){
++	tree *tmp_list_p = list_p;
++	fprintf(stderr, "ww: omp_parallel is setting flags.\n");
++	while((c = *tmp_list_p) != NULL){
++		tmp_list_p = &OMP_CLAUSE_CHAIN (c);
++		fprintf(stderr, "ww: omp clause code=%d\n", c->omp_clause.code);
++		if(tmp_list_p == NULL){
++			break;
++		}
++	}
++	c = build_omp_clause(UNKNOWN_LOCATION, OMP_HIDDEN_CLAUSE_USE_XQ);
++	OMP_CLAUSE_CHAIN(c) = *list_p;
++	*list_p = c;
++ }
++ #endif
+   while ((c = *list_p) != NULL)
+     {
+       splay_tree_node n;
+@@ -11846,6 +11878,11 @@ gimplify_adjust_omp_clauses (gimple_seq *pre_p, gimple_seq body, tree *list_p,
+ 	case OMP_CLAUSE_FINAL:
+ 	case OMP_CLAUSE_MERGEABLE:
+ 	case OMP_CLAUSE_PROC_BIND:
++#ifdef GCC_ENABLE_XQ_COMPAT
++	case OMP_HIDDEN_CLAUSE_USE_XQ:
++		fprintf(stderr, "ww: ADJUST CLAUSE: OMP_HIDDEN_CLAUSE_USE_XQ\n");
++		break;
++#endif
+ 	case OMP_CLAUSE_SAFELEN:
+ 	case OMP_CLAUSE_SIMDLEN:
+ 	case OMP_CLAUSE_DEPEND:
+diff --git a/gcc/omp-expand.cc b/gcc/omp-expand.cc
+index bb019ea3a18..6cfa785868e 100644
+--- a/gcc/omp-expand.cc
++++ b/gcc/omp-expand.cc
+@@ -320,6 +320,7 @@ determine_parallel_type (struct omp_region *region)
+      adding another big set of APIs or slowing down the normal paths is
+      not acceptable.  */
+   tree pclauses = gimple_omp_parallel_clauses (last_stmt (par_entry_bb));
++  fprintf(stderr, "determine_parallel_type: found clauses.\n");
+   if (omp_find_clause (pclauses, OMP_CLAUSE__REDUCTEMP_))
+     return;
+ 
+@@ -631,11 +632,30 @@ expand_parallel_call (struct omp_region *region, basic_block bb,
+     }
+   else
+     clause_loc = gimple_location (entry_stmt);
+-
++#ifdef GCC_ENABLE_XQ_COMPAT
++	// ww: we want to inject the flag into the flags var inside the gomp_team_start
++	// originally, these flags are set when there are parallel constructs with num_threads/proc_bind clauses
++	// we want to set the bits that are not used as hidden flags that can be recognized by the gomp_team_start
++	// so the xq enabled runtime can either enable xq or not based on this hidden flags
++	// we arbitrarily let 32 (bit 6) to be the flag for xq
++	bool has_flags =c ? true : false; 
++#endif
+   c = omp_find_clause (clauses, OMP_CLAUSE_PROC_BIND);
+   if (c)
+     flags = build_int_cst (unsigned_type_node, OMP_CLAUSE_PROC_BIND_KIND (c));
+-
++#ifdef GCC_ENABLE_XQ_COMPAT
++	has_flags = has_flags || c;
++  	// ww: a hack to determine if use xq
++  	c = omp_find_clause (clauses, OMP_HIDDEN_CLAUSE_USE_XQ);
++	if(c && has_flags){
++		fprintf(stderr, "ww: Detect hidden clause!, c=%d, flags=%d\n", c, flags);
++		*flags->int_cst.val |= 32; // an arbituray bit pos for use_xq flag
++	}
++	else if(c){
++		flags = build_int_cst (unsigned_type_node, 32);
++		fprintf(stderr, "ww: Detect hidden clause!, c=%ld\n", *flags->int_cst.val);
++	}
++#endif
+   /* Ensure 'val' is of the correct type.  */
+   val = fold_convert_loc (clause_loc, unsigned_type_node, val);
+ 
+diff --git a/gcc/omp-low.cc b/gcc/omp-low.cc
+index 06d13a2a7c2..c6b233ebdaf 100644
+--- a/gcc/omp-low.cc
++++ b/gcc/omp-low.cc
+@@ -1724,6 +1724,9 @@ scan_sharing_clauses (tree clauses, omp_context *ctx)
+ 	case OMP_CLAUSE_FINALIZE:
+ 	case OMP_CLAUSE_TASK_REDUCTION:
+ 	case OMP_CLAUSE_ALLOCATE:
++#ifdef GCC_ENABLE_XQ_COMPAT
++	case OMP_HIDDEN_CLAUSE_USE_XQ: // ww: use_xq fall-thru
++#endif
+ 	  break;
+ 
+ 	case OMP_CLAUSE_ALIGNED:
+@@ -1902,6 +1905,9 @@ scan_sharing_clauses (tree clauses, omp_context *ctx)
+ 	case OMP_CLAUSE_FINAL:
+ 	case OMP_CLAUSE_MERGEABLE:
+ 	case OMP_CLAUSE_PROC_BIND:
++#ifdef GCC_ENABLE_XQ_COMPAT
++	case OMP_HIDDEN_CLAUSE_USE_XQ: // ww: use_xq fall-thru
++#endif
+ 	case OMP_CLAUSE_SAFELEN:
+ 	case OMP_CLAUSE_SIMDLEN:
+ 	case OMP_CLAUSE_ALIGNED:
+diff --git a/gcc/tree-core.h b/gcc/tree-core.h
+index f1c2b6413a3..941cc275182 100644
+--- a/gcc/tree-core.h
++++ b/gcc/tree-core.h
+@@ -22,6 +22,8 @@ along with GCC; see the file COPYING3.  If not see
+ 
+ #include "symtab.h"
+ 
++#define GCC_ENABLE_XQ_COMPAT 1
++
+ /* This file contains all the data structures that define the 'tree' type.
+    There are no accessor macros nor functions in this file. Only the
+    basic data structures, extern declarations and type definitions.  */
+@@ -522,6 +524,11 @@ enum omp_clause_code {
+ 
+   /* OpenACC clause: nohost.  */
+   OMP_CLAUSE_NOHOST,
++
++#ifdef GCC_ENABLE_XQ_COMPAT
++  /* XTask hidden clause for a hack: ww: use_xq*/
++  OMP_HIDDEN_CLAUSE_USE_XQ,
++#endif
+ };
+ 
+ #undef DEFTREESTRUCT
+diff --git a/gcc/tree-nested.cc b/gcc/tree-nested.cc
+index 078ceab3ca3..fa8870d484c 100644
+--- a/gcc/tree-nested.cc
++++ b/gcc/tree-nested.cc
+@@ -1490,6 +1490,9 @@ convert_nonlocal_omp_clauses (tree *pclauses, struct walk_stmt_info *wi)
+ 	case OMP_CLAUSE_BIND:
+ 	case OMP_CLAUSE__CONDTEMP_:
+ 	case OMP_CLAUSE__SCANTEMP_:
++#ifdef GCC_ENABLE_XQ_COMPAT
++  case OMP_HIDDEN_CLAUSE_USE_XQ: // ww: use_xq fall-thru
++#endif
+ 	  break;
+ 
+ 	  /* The following clause belongs to the OpenACC cache directive, which
+@@ -2285,6 +2288,9 @@ convert_local_omp_clauses (tree *pclauses, struct walk_stmt_info *wi)
+ 	case OMP_CLAUSE_BIND:
+ 	case OMP_CLAUSE__CONDTEMP_:
+ 	case OMP_CLAUSE__SCANTEMP_:
++#ifdef GCC_ENABLE_XQ_COMPAT
++  case OMP_HIDDEN_CLAUSE_USE_XQ: // ww: use_xq fall-thru
++#endif
+ 	  break;
+ 
+ 	  /* The following clause belongs to the OpenACC cache directive, which
+diff --git a/libgomp/config/linux/bar.c b/libgomp/config/linux/bar.c
+index 159f4182cb8..0326f698ec9 100644
+--- a/libgomp/config/linux/bar.c
++++ b/libgomp/config/linux/bar.c
+@@ -34,6 +34,7 @@
+ void
+ gomp_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
+ {
++  // xtask_debug(0, 1, "state = %d.", state);
+   if (__builtin_expect (state & BAR_WAS_LAST, 0))
+     {
+       /* Next time we'll be awaiting TOTAL threads again.  */
+@@ -80,7 +81,87 @@ gomp_team_barrier_wake (gomp_barrier_t *bar, int count)
+ void
+ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
+ {
++  // xtask_debug(0, 1, "state = %d.", state);
+   unsigned int generation, gen;
++  #ifdef GOMP_USE_XQUEUE
++  // xperflog_record(XPERF_BAR_START, 0);
++  /**
++   * XTask: Design new centralized busy barrier that meets the following requirements:
++   * 1. The barrier should be released only when:
++   *  a. All threads have arrived at the barrier.
++   *  b. There is no task in the task queue (aka. xtask_count == 0).
++   *    1. If there is a task in the task queue, the barrier will keep running tasks until the task queue is empty.
++   *    Warning: This design may not satisfy the OpenMP requirements, further check needed.
++   *  c. generation +=1 by the last one exits the barrier.
++   *  d. ? final_spin ?: when barrier is releasing, final_spin is 1
++   * 
++   * Barrier Generation in GOMP (should mean)/means all the threads living at the same time.
++   * Barrier should only be put into sleep when:
++   * 1. This thread reaches the barrier -> <atomic> awaited += 1 
++   * 2. No tasks in task queue
++   * 
++  */
++  struct gomp_thread *thr = gomp_thread();
++  bool released = false;
++  if(__builtin_expect(thr->use_xq, 1)){
++    // xtask_debug(0, 2, "state=%d\n", state);
++    /**
++     * reset the awaited count to total, this is guaranteed to happen before last thread calling gathered.
++     * last thread is gathered without the knowledge that the awaited count has been reset.
++    */
++    if(state & BAR_WAS_LAST){
++      // xtask_debug(0, 0, "last bar gather.");
++      __atomic_store_n(&bar->awaited, bar->total, MEMMODEL_RELEASE);
++    }
++    gomp_barrier_state_t t; 
++    while(1){
++      /**
++       * xtask_barrier_handle_tasks returns only when all the condition meets:
++       * 1. All threads have arrived at the barrier by calling gomp_team_barrier_wait, gomp_barrier_wait_start or gomp_team_barrier_wait_final once each
++       * 2. Task queue is empty at the point of checking
++       * 3. thr's task has no dependencies
++       * 4. Then, the above condition will initiate the barrier releasing process.
++       * Once thr detects it is released, it will return from this function.
++      */
++
++      xtask_barrier_handle_tasks(state); 
++      /**
++       * The threads has been released, and the first comer will see a full awaited count,
++       * gathered and on_release has been set to true, reset them once
++       * release flag make sure the state is only updated once inside the loop.
++       * Note now the state is different than the one passed in
++      */
++     
++     if(!released){
++      state &= ~BAR_WAS_LAST;
++      t = gomp_barrier_wait_start(bar);
++      released = true;
++     }
++
++      gen = __atomic_load_n(&bar->generation, MEMMODEL_ACQUIRE);
++      if(__builtin_expect(gen == state + BAR_INCR, 0))
++        break;
++      
++      if(__builtin_expect(t & BAR_WAS_LAST, 0)){
++        // or this atomic can be replaced with a simple assignmet?
++        state &= ~BAR_CANCELLED;
++        // state += BAR_INCR;
++        bar->awaited = bar->total; // FIXME: maybe we can avoid using atomic like this?
++        // __atomic_store_n(&bar->awaited, bar->total, MEMMODEL_RELEASE);
++        __atomic_store_n(&bar->generation, state + BAR_INCR, MEMMODEL_RELEASE);
++        // gen = __atomic_load_n(&bar->generation, MEMMODEL_ACQUIRE);
++        // xtask_debug(0, 0, "last bar exits, state=%d, gen=%d, total=%d", state, gen, bar->total);
++        break;
++      }
++
++      state &= ~BAR_CANCELLED;
++    }
++    // flag of current thread is reinit to the right state.
++    xflag_reinit(thr, state);
++   
++    return;
++  }else{ // if not using xq
++  #endif // GOMP_USE_XQUEUE
+ 
+   if (__builtin_expect (state & BAR_WAS_LAST, 0))
+     {
+@@ -119,6 +200,9 @@ gomp_team_barrier_wait_end (gomp_barrier_t *bar, gomp_barrier_state_t state)
+       generation |= gen & BAR_WAITING_FOR_TASK;
+     }
+   while (gen != state + BAR_INCR);
++  #ifdef GOMP_USE_XQUEUE
++  } // end of else
++  #endif
+ }
+ 
+ void
+diff --git a/libgomp/config/nvptx/team.c b/libgomp/config/nvptx/team.c
+index 6923416fb4e..81619f959ca 100644
+--- a/libgomp/config/nvptx/team.c
++++ b/libgomp/config/nvptx/team.c
+@@ -30,6 +30,7 @@
+ #include "libgomp.h"
+ #include <stdlib.h>
+ #include <string.h>
++#include <stdio.h>
+ 
+ struct gomp_thread *nvptx_thrs __attribute__((shared,nocommon));
+ int __gomp_team_num __attribute__((shared,nocommon));
+diff --git a/libgomp/config/posix/simple-bar.h b/libgomp/config/posix/simple-bar.h
+index ebc640247ee..16541ed2b12 100644
+--- a/libgomp/config/posix/simple-bar.h
++++ b/libgomp/config/posix/simple-bar.h
+@@ -30,6 +30,7 @@
+ #define GOMP_SIMPLE_BARRIER_H 1
+ 
+ #include "bar.h"
++// #include <stdio.h>
+ 
+ typedef struct
+ {
+diff --git a/libgomp/env.c b/libgomp/env.c
+index 1c4ee894515..acec2fbaed4 100644
+--- a/libgomp/env.c
++++ b/libgomp/env.c
+@@ -98,6 +98,9 @@ size_t gomp_affinity_format_len;
+ char *goacc_device_type;
+ int goacc_device_num;
+ int goacc_default_dims[GOMP_DIM_MAX];
++#ifdef GOMP_USE_XQUEUE
++unsigned int gomp_num_task_queues;
++#endif
+ 
+ #ifndef LIBGOMP_OFFLOADED_ONLY
+ 
+diff --git a/libgomp/error.c b/libgomp/error.c
+index 50ed85eedb1..89cf9fc80d7 100644
+--- a/libgomp/error.c
++++ b/libgomp/error.c
+@@ -40,8 +40,14 @@
+ void
+ gomp_vdebug (int kind __attribute__ ((unused)), const char *msg, va_list list)
+ {
++#ifdef GOMP_USE_XQUEUE
++  if(gomp_debug_var >= kind)
++    vfprintf (stderr, msg, list);
++#else
++
+   if (gomp_debug_var)
+     vfprintf (stderr, msg, list);
++#endif
+ }
+ 
+ #undef gomp_debug
+@@ -55,6 +61,65 @@ gomp_debug (int kind, const char *msg, ...)
+   va_end (list);
+ }
+ 
++#ifdef GOMP_USE_XQUEUE
++#undef xtask_debug
++void
++xtask_debug (int kind, int level, const char* func, const char *msg, ...)
++{
++  va_list list;
++
++  if (gomp_debug_var >= kind)
++    {
++      va_start (list, msg);
++
++      char tabs[64], prefix[128], buf[1024];
++      // build tabs
++      int i = 0;
++      while(i < level){
++        tabs[2 * i] = ' ';
++        tabs[2 * i + 1] = ' ';
++        i++;
++      }
++      tabs[2 * i] = '\0';
++
++      sprintf(prefix, "[tid=%d]%s(%s): ", omp_get_thread_num(), tabs, func);
++      sprintf(buf, "%s%s\n", prefix, msg);
++      // print all at once so that the output is not interleaved
++      vfprintf (stderr, buf, list);
++      va_end (list);
++    }
++}
++
++#ifdef XTASK_ENABLE_PROF
++#undef xtask_prof
++void xtask_prof (int kind, int level, const char* func, const char *msg, ...)
++{
++  va_list list;
++
++  if (gomp_debug_var >= kind)
++    {
++      va_start (list, msg);
++
++      char tabs[64], prefix[128], buf[1024];
++      // build tabs
++      int i = 0;
++      while(i < level){
++        tabs[2 * i] = ' ';
++        tabs[2 * i + 1] = ' ';
++        i++;
++      }
++      tabs[2 * i] = '\0';
++
++      sprintf(prefix, "[XTASK-PROFLING][tid=%d]:%s ", omp_get_thread_num(), tabs);
++      sprintf(buf, "%s%s\n", prefix, msg);
++      // print all at once so that the output is not interleaved
++      vfprintf (stderr, buf, list);
++      va_end (list);
++    }
++}
++#endif
++#endif
++
+ void
+ gomp_verror (const char *fmt, va_list list)
+ {
+diff --git a/libgomp/libgomp.h b/libgomp/libgomp.h
+index 92f841981ef..d127e16903b 100644
+--- a/libgomp/libgomp.h
++++ b/libgomp/libgomp.h
+@@ -73,6 +73,34 @@
+ # pragma GCC visibility push(hidden)
+ #endif
+ 
++// use xqueue
++#define GOMP_USE_XQUEUE 1
++#define XGOMP_VERSION "25.2.6"
++
++#if defined(GOMP_USE_XQUEUE)
++
++// #define XGOMP_NAWS 1 // enable numa-aware work stealing
++// #define XGOMP_NARP 1 // enable numa-aware redirect push
++// #define XGOMP_PLOG 1 // enable performance logging
++#define XGOMP_PSTATS 1 // enable performance statistics
++
++#endif
++
++/* By default, XGOMP_NAWS is enabled if both are enabled */
++#ifdef XGOMP_NAWS 
++
++#undef XGOMP_NARP
++
++#endif
++#define NCORES_NUMA 24
++
++// obsolete vars
++// #define XGOMP_PLOG 1
++
++// #define XGOMP_PSTATS 1 // xtask performance statistics
++// #define ENABLE_PERFLOG 1 // xtask performance logging
++
++
+ /* If we were a C++ library, we'd get this from <std/atomic>.  */
+ enum memmodel
+ {
+@@ -177,6 +205,21 @@ team_free (void *ptr)
+ extern void gomp_vdebug (int, const char *, va_list);
+ extern void gomp_debug (int, const char *, ...)
+ 	__attribute__ ((format (printf, 2, 3)));
++
++#ifdef GOMP_USE_XQUEUE
++extern void xtask_debug(int, int, const char*, const char *, ...)
++__attribute__ ((format (printf, 4, 5)))
++;
++#define xtask_debug(KIND, LEVEL, ...) \
++  do { \
++    if (__builtin_expect (gomp_debug_var, 0)) \
++      xtask_debug ((KIND), (LEVEL), __FUNCTION__, __VA_ARGS__); \
++  } while (0)
++
++
++
++#endif
++
+ #define gomp_vdebug(KIND, FMT, VALIST) \
+   do { \
+     if (__builtin_expect (gomp_debug_var, 0)) \
+@@ -506,6 +549,9 @@ extern uintptr_t gomp_def_allocator;
+ extern int goacc_device_num;
+ extern char *goacc_device_type;
+ extern int goacc_default_dims[GOMP_DIM_MAX];
++#ifdef GOMP_USE_XQUEUE
++extern unsigned int gomp_num_task_queues; // number of task queues
++#endif
+ 
+ enum gomp_task_kind
+ {
+@@ -559,6 +605,28 @@ struct gomp_taskwait
+   gomp_sem_t taskwait_sem;
+ };
+ 
++#ifdef GOMP_USE_XQUEUE
++typedef struct gomp_task gomp_task_t;
++#define TASK_INIT_VAL -1
++#define TASK_SUCCESSFULLY_PUSHED 0
++#define TASK_NOT_PUSHED 1
++#define TASK_QUEUE_FULL 2
++
++#define GOMP_ATOMIC_CMPXCHG(PTR, OLD, NEW) __atomic_compare_exchange_n (PTR, OLD, NEW, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)
++#define GOMP_ATOMIC_ST_REL(PTR, VAL) __atomic_store_n (PTR, VAL, __ATOMIC_RELEASE)
++#define GOMP_ATOMIC_LD_ACQ(PTR) __atomic_load_n (PTR, __ATOMIC_ACQUIRE)
++#define GOMP_ATOMIC_ST_RLX(PTR, VAL) __atomic_store_n (PTR, VAL, __ATOMIC_RELAXED)
++// c is different from c++ here, c++ first return then do the operation
++// c first do the operations then return
++#define GOMP_ATOMIC_INC(PTR) __atomic_add_fetch (PTR, 1, __ATOMIC_ACQ_REL)
++#define GOMP_ATOMIC_DEC(PTR) __atomic_sub_fetch (PTR, 1, __ATOMIC_ACQ_REL)
++// #define GOMP_ATOMIC_LD_ACQ(PTR) __atomic_load_n (PTR, __ATOMIC_SEQ_CST)
++// #define GOMP_ATOMIC_INC(PTR) __atomic_add_fetch (PTR, 1, __ATOMIC_SEQ_CST)
++// #define GOMP_ATOMIC_DEC(PTR) __atomic_sub_fetch (PTR, 1, __ATOMIC_SEQ_CST)
++
++#define GOMP_ATOMIC_ADD(PTR, VAL) __atomic_add_fetch (PTR, VAL, __ATOMIC_ACQ_REL)
++#define GOMP_ATOMIC_SUB(PTR, VAL) __atomic_sub_fetch (PTR, VAL, __ATOMIC_ACQ_REL)
++#endif
+ /* This structure describes a "task" to be run by a thread.  */
+ 
+ struct gomp_task
+@@ -609,6 +677,16 @@ struct gomp_task
+      block further execution of their parent until the dependencies
+      are satisfied.  */
+   bool parent_depends_on;
++#ifdef GOMP_USE_XQUEUE
++#ifdef XGOMP_PSTATS
++  unsigned int src_tid; // source thread id that instantiated this task, for ws we are curious about its locality
++#endif
++  unsigned long td_incomplete_child_tasks;
++#ifdef XGOMP_PLOG
++  unsigned long long task_len;
++  unsigned long long task_id;
++#endif
++#endif
+   /* Dependencies provided and/or needed for this task.  DEPEND_COUNT
+      is the number of items available.  */
+   struct gomp_task_depend_entry depend[];
+@@ -715,6 +793,9 @@ struct gomp_team
+ 
+   /* This barrier is used for most synchronization of the team.  */
+   gomp_barrier_t barrier;
++#if defined(GOMP_USE_XQUEUE) && defined(XGOMP_PLOG)
++  volatile int xperflog_awaited;
++#endif
+ 
+   /* Initial work shares, to avoid allocating any gomp_work_share
+      structs in the common case.  */
+@@ -745,6 +826,202 @@ struct gomp_team
+   struct gomp_task implicit_task[];
+ };
+ 
++
++// xqueue defines
++#ifdef GOMP_USE_XQUEUE
++
++#define TASK_DEQUE_SIZE(td) ((td)->td_deque_size)
++#define TASK_DEQUE_MASK(td) ((td)->td_deque_size - 1)
++#define INITIAL_TASK_BITS 5
++#define INITIAL_TASK_DEQUE_SIZE (1 << INITIAL_TASK_BITS)
++// Simple lockless thread messageing mechanism, messages can be dropped.
++#define MSG_TID2REQ(a) ((uint64_t)(a) << 40) // convert tid to request
++#define MSG_REQ2ROUND(a) ((a) & (uint64_t)((1ULL << 40) - 1)) // convert request to round
++#define MSG_REQ2TID(a) ((unsigned int)((a) >> 40)) // convert request to tid
++
++/* This structure contains task queue for xqueue implementation. */
++struct gomp_taskq{
++  volatile struct gomp_task **td_deque; // task queue, an array of tasks' pointers
++  unsigned int td_deque_head; // head of the queue
++  unsigned int td_deque_tail; // tail of the queue
++
++  /**
++   * Only used when stats/log is enabled
++   */
++  #if defined(XGOMP_PLOG) || defined(XGOMP_PSTATS)
++  unsigned long long nin; // number of tasks pushed in
++  unsigned long long nout; // number of tasks popped out 
++  #endif
++};
++
++/* This structure is used for tree barreir sync, and detect barrier termination*/
++#define XFLAG_TREE_DEGREE 2
++enum xbar_state
++{
++  XFLAG_STATE_RUNNING,
++  XFLAG_STATE_DONE
++};
++
++struct xflag
++{
++  struct gomp_thread *thr;
++  int nchild;
++  struct xflag *parent;
++  struct xflag *child[XFLAG_TREE_DEGREE];
++  volatile unsigned long child_done[XFLAG_TREE_DEGREE];
++  int cidx; // child index in parent
++  enum xbar_state state;
++  volatile bool on_release;
++  volatile int gathered;
++}
++__attribute__((aligned(64)));
++
++#ifdef XGOMP_PSTATS
++typedef enum xstats_type{
++
++  /* GOMP task */
++  STATS_NTASK, // number of tasks
++
++  /* Task execution locality */
++  STATS_NTASK_EXEC_SELF, // task executed by self
++  STATS_NTASK_EXEC_LOCAL, // task executed locally
++  STATS_NTASK_EXEC_REMOTE, // task executed by remote
++
++  /* XQueue task operations (static) */
++  STATS_STATIC_NTASK_PUSHED, // static push
++  STATS_STATIC_NTASK_NOT_PUSHED, // static not push
++
++  /* DLB related */
++#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
++
++  /* DLB requests related */
++  STATS_DLB_NREQ_SENT, // number of requests sent
++  STATS_DLB_NREQ_HANDLED, // number of requests handled
++  STATS_DLB_NREQ_HAS_STEAL, // number of requests handled that results in at least one task stolen
++  STATS_DLB_NREQ_HAS_NO_STEAL, // (redundant but for sanity-check) number of requests handled that results in no task stolen (fail = handled - success)
++  STATS_DLB_NREQ_TARGET_FULL, // number of requests handled that results in pushing to target queue full
++  #if defined(XGOMP_NAWS)
++  STATS_DLB_NREQ_SRC_EMPTY, // (NA-WS) number of requests handled that resulg in popping from empty source queue
++  #endif  
++  /* DLB task management operations*/
++  STATS_DLB_NTASK_PUSHED, // number of tasks pushed by dlb
++  STATS_DLB_NTASK_NOT_PUSHED, // number of tasks not pushed by dlb, because target queue is full. always 0 for na-ws
++  // STATS_DLB_NTASK_TARGET_QUEUE_FULL, // number of tasks pushed to a full target queue by dlb
++  
++  /* DLB task locality */
++  STATS_DLB_NTASK_STOLEN_SELF, // number of tasks stolen by self
++  STATS_DLB_NTASK_STOLEN_LOCAL, // number of tasks stolen locally
++  STATS_DLB_NTASK_STOLEN_REMOTE, // number of tasks stolen remotely
++#endif
++
++  STATS_SIZE
++} xstats_type_t;
++
++#endif // XGOMP_PSTATS
++
++#if defined(XGOMP_NAWS) || defined(XGOMP_NARP) 
++
++#define NVICTIMS 4
++#define NSTEALS 8
++#define NWAITS 2000
++#define NCORES_NUMA 24
++#define LOCAL_STEAL_PROB 256
++
++#ifdef XGOMP_NARP
++typedef enum narp_flag{
++  NARP_IDLE = 0,
++  NARP_HANDLING_REQ = 1,
++} narp_flag_t;
++#endif
++
++// Work Stealing Data, including ws related stats
++struct wsd{
++  // TODO: Need to think and optimize to address false sharing
++  uint64_t round;
++  uint64_t req;
++  int nvictims; // number of victims per req
++  int nsteals; // steal per request
++  int nwaits; // waiting loops
++  int nlprob; // probability of sending to NUMA-local core 
++  int leader; // numa zone leader
++  
++  // TODO: this may be changed to cater to more general NUMA cases
++  // e.g. NUMA topology, etc.
++  int ncores_numa; // number of cores per numa zone
++
++#ifdef XGOMP_NARP
++  int redirect_tid; // -1 means no redirect
++  int nredirect; // current number of redirects
++  narp_flag_t flag; // NARP state flag
++#endif
++};
++
++#endif // XGOMP_NAWS || XGOMP_NARP
++
++#ifdef XGOMP_PLOG
++#define XPERFLOG_MAX_EVENTS 1<<27 // 128MB events
++// lets use bit 10 to indicate if the event is a sample event
++#define XPERF_END_SHIFT 5
++#define LEVENT(a) ((a) & ((1 << XPERF_END_SHIFT) - 1))
++#define HEVENT(a) ((a) & (~((1 << XPERF_END_SHIFT) -1)))
++typedef enum xperf_event_type{
++/**
++ * Below is the event types with/without sample
++*/
++  XPERF_NULL,
++  XPERF_THREAD,
++  XPERF_TASK,
++  XPERF_GOMP_TASK,
++  XPERF_TASKWAIT,
++  XPERF_BAR, 
++  XPERF_STALL,
++  XPERF_DUMP,
++  
++
++  XPERF_N_EVENTS,
++
++  XPERF_THREAD_END = XPERF_THREAD << XPERF_END_SHIFT,
++  XPERF_TASK_END = XPERF_TASK << XPERF_END_SHIFT,
++  XPERF_GOMP_TASK_END = XPERF_GOMP_TASK << XPERF_END_SHIFT,
++  XPERF_TASKWAIT_END = XPERF_TASKWAIT << XPERF_END_SHIFT,
++  XPERF_BAR_END = XPERF_BAR << XPERF_END_SHIFT,
++  XPERF_STALL_END = XPERF_STALL << XPERF_END_SHIFT,
++  XPERF_DUMP_END = XPERF_DUMP << XPERF_END_SHIFT,
++  
++  
++} xperf_type_t;
++
++typedef struct xperflog_cell {
++  unsigned long long ts; // timestamp, __rdtscp or __rdtsc
++  xperf_type_t event; // event type
++  unsigned long long hfref; // frame reference number for highbit event
++  unsigned long long lfref; // frame reference number for lowbit event
++  long long sample_qsize; // sample queue size
++  long long value; // value we want
++} xperflog_cell_t
++__attribute__((aligned(64)));
++
++typedef struct xperflog {
++  unsigned long long frefc[XPERF_N_EVENTS]; // frame refernce counters
++  unsigned long long eidx; // index of the log
++  xperflog_cell_t *log; // log
++  unsigned int last_q;
++  long long ssum; // sample sum
++  char *xperflog_path;
++  char filename[256]; // log file name
++  void *fp; // use void * instead of FILE * to avoid including stdio.h here
++
++  int tid; // thread id
++  int generation;
++  bool is_stalling; // is stalling
++  // should flush then reinit after each team barrier
++
++} xperflog_t
++__attribute__((aligned(64)))
++;
++#endif // XGOMP_PLOG
++#endif // GOMP_USE_XQUEUE
++
+ /* This structure contains all data that is private to libgomp and is
+    allocated per thread.  */
+ 
+@@ -761,6 +1038,46 @@ struct gomp_thread
+   /* This is the task that the thread is currently executing.  */
+   struct gomp_task *task;
+ 
++#ifdef GOMP_USE_XQUEUE
++  /* This is the xqueue implementation of task queue.  */
++  struct gomp_taskq ** td_task_q;
++  unsigned int num_queues;
++  unsigned long last_q;
++  unsigned long last_q_accessed;
++
++  int td_deque_size;
++  int td_deque_ntasks;
++  int td_deque_last_stolen;
++  unsigned long tl_task_count; // thread local task count
++  unsigned long tl_task_queued_count;
++  bool use_xq; // use xq or not, default is yes, when incompat clauses appeared, will use default GNU tasking implementation
++  struct xflag xflag;
++
++/* Thread's Perflog data structure*/
++#ifdef XGOMP_PLOG
++
++  struct xperflog xperflog;
++
++#endif // XGOMP_PLOG
++
++/* Thread's Perfstats data structure*/
++#ifdef XGOMP_PSTATS
++
++  unsigned long long pstats[STATS_SIZE];
++  unsigned int ncores_numa;
++  unsigned int leader;
++  unsigned int gen; // only accessible by pstats.
++
++#endif // XGOMP_PSTATS
++
++/* Thread's Work Stealing Data structure*/
++#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
++
++  struct wsd wsd; // work stealing data
++
++#endif // XGOMP_NAWS || XGOMP_NARP
++
++#endif // GOMP_USE_XQUEUE
+   /* This semaphore is used for ordered loops.  */
+   gomp_sem_t release;
+ 
+@@ -996,7 +1313,31 @@ gomp_finish_task (struct gomp_task *task)
+   if (__builtin_expect (task->depend_hash != NULL, 0))
+     free (task->depend_hash);
+ }
++#ifdef GOMP_USE_XQUEUE
++extern void gomp_alloc_task_q(struct gomp_thread *thr);
++extern void xtask_barrier_handle_tasks (gomp_barrier_state_t);
++extern long get_task_count();
++extern void xflag_init(struct gomp_thread *thr);
++extern void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs);
++// extern void xflag_build_tree(struct xflag *, int, int);
++// extern void xflag_optimize_tree(struct xflag *);
++
++#ifdef XGOMP_PLOG
++#include <x86intrin.h>
++extern void xperflog_init();
++extern void xperflog_wait(); // all threads wait for current dump to finish.
++extern void xperflog_record(xperf_type_t, unsigned long long, unsigned long long);
++extern void xperflog_dump(struct gomp_thread *);
++extern void xperflog_reset(struct gomp_thread *);
++extern void xperflog_dump_reset();
++#endif // XGOMP_PLOG
++
++#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
++// #include <stdio.h>
++extern void xgomp_getenv(); // get & set environment variables
++#endif
+ 
++#endif // GOMP_USE_XQUEUE
+ /* team.c */
+ 
+ extern struct gomp_team *gomp_new_team (unsigned);
+diff --git a/libgomp/libgomp.map b/libgomp/libgomp.map
+index 2ac58094169..b897449a5fb 100644
+--- a/libgomp/libgomp.map
++++ b/libgomp/libgomp.map
+@@ -226,6 +226,13 @@ OMP_5.1 {
+ 	omp_get_teams_thread_limit_;
+ } OMP_5.0.2;
+ 
++# xtask-omp
++XOMP_1.0 {
++	global:
++		xomp_perflog_info;
++		xomp_perf_dump;
++};
++
+ GOMP_1.0 {
+   global:
+ 	GOMP_atomic_end;
+diff --git a/libgomp/omp.h.in b/libgomp/omp.h.in
+index 89c5d65bcd5..ce948589dcd 100644
+--- a/libgomp/omp.h.in
++++ b/libgomp/omp.h.in
+@@ -328,6 +328,12 @@ extern void *omp_realloc (void *, __SIZE_TYPE__,
+ 
+ extern void omp_display_env (int) __GOMP_NOTHROW;
+ 
++/**
++ * XTask Performance Logging API
++*/
++extern void xomp_perflog_info(void) __GOMP_NOTHROW;
++extern void xomp_perf_dump(void) __GOMP_NOTHROW;
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/libgomp/parallel.c b/libgomp/parallel.c
+index f7722990566..c2dee7c8b16 100644
+--- a/libgomp/parallel.c
++++ b/libgomp/parallel.c
+@@ -172,6 +172,7 @@ void
+ GOMP_parallel (void (*fn) (void *), void *data, unsigned num_threads,
+ 	       unsigned int flags)
+ {
++  xtask_debug(0, 0, "GOMP_parallel.");
+   num_threads = gomp_resolve_num_threads (num_threads, 0);
+   gomp_team_start (fn, data, num_threads, flags, gomp_new_team (num_threads),
+ 		   NULL);
+diff --git a/libgomp/task.c b/libgomp/task.c
+index cc0d38e7e57..c2bdc319073 100644
+--- a/libgomp/task.c
++++ b/libgomp/task.c
+@@ -60,6 +60,1009 @@ htab_eq (hash_entry_type x, hash_entry_type y)
+   return x->addr == y->addr;
+ }
+ 
++#ifdef GOMP_USE_XQUEUE
++// declare the functions
++/**
++ * Random generator from stackoverflow - ww
++*/
++unsigned short lfsr = 0xACE1u;
++unsigned bit;
++unsigned g_seed = 123;
++unsigned myrand(){
++	g_seed = (214013*g_seed+2531011);
++	return (g_seed>>16)&0x7FFF;
++}
++
++
++void gomp_alloc_task_q(struct gomp_thread *);
++static int gomp_push_task(struct gomp_task *);
++static gomp_task_t* gomp_remove_my_task();
++static gomp_task_t* gomp_remove_aux_task(unsigned long *);
++
++
++#if defined(XGOMP_PSTATS)
++static inline void pstats_init(){
++	struct gomp_thread *thr = gomp_thread();
++	/* Zero out all stats, maybe redundant */
++	xtask_debug(0, 0, "pstats_init");
++	for(int i = 0; i < STATS_SIZE; i++)
++		thr->pstats[i] = 0;
++	thr->ncores_numa = getenv("NCORES_NUMA") == NULL ? NCORES_NUMA : atoi(getenv("NCORES_NUMA"));
++	thr->leader =  thr->ts.team_id / thr->ncores_numa * thr->ncores_numa;
++}
++
++
++#endif // XGOMP_PSTATS
++
++#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
++// #include <stdio.h>
++void xgomp_getenv(){
++	struct gomp_thread *thr = gomp_thread();
++	struct wsd *wsd = &thr->wsd;
++	char *env;
++
++	env = getenv("N_VICTIMS");
++	if(env == NULL)
++	{
++		wsd->nvictims = NVICTIMS;
++		xtask_debug(0, 0, "N_VICTIMS not set, using default value=%d", wsd->nvictims);
++	}
++	else
++	{wsd->nvictims = atoi(env);}
++
++	env = getenv("NSTEALS");
++	if(env == NULL)
++	{
++		wsd->nsteals = NSTEALS;
++		xtask_debug(0, 0, "NSTEALS not set, using default value=%d", wsd->nsteals);
++	}
++	else
++	{
++		wsd->nsteals = atoi(env);
++		if(wsd->nsteals > INITIAL_TASK_DEQUE_SIZE)
++			wsd->nsteals = INITIAL_TASK_DEQUE_SIZE;
++	}
++
++	env = getenv("NWAITS");
++	if(env == NULL)
++	{
++		wsd->nwaits = NWAITS;
++		xtask_debug(0, 0, "NWAITS not set, using default value=%d", wsd->nwaits);
++	}
++	else
++	{wsd->nwaits = atoi(env);}
++
++	env = getenv("NCORES_NUMA");
++	if(env == NULL)
++	{
++		wsd->ncores_numa = NCORES_NUMA;
++		xtask_debug(0, 0, "NCORES_NUMA not set, using default value=%d", wsd->ncores_numa);
++	}
++	else
++	{wsd->ncores_numa = atoi(env);}
++
++	env = getenv("LOCAL_STEAL_PROB");
++	if(env == NULL)
++	{
++		wsd->nlprob = LOCAL_STEAL_PROB;
++		xtask_debug(0, 0, "LOCAL_STEAL_PROB not set, using default value=%d", wsd->nlprob);
++	}
++	else
++	{wsd->nlprob = atoi(env);}
++	// xtask_debug(0, 0, "sanity check: round=%ld, req=%ld, leader=%d", wsd->round, wsd->req, wsd->leader);
++}
++
++
++static inline void send_reqs()
++{
++	struct gomp_thread *thr = gomp_thread();
++	struct wsd* wsd = &thr->wsd;
++	int nthreads = thr->ts.team->nthreads;
++	int nvictims = wsd->nvictims;
++	int leader = wsd->leader;
++
++	unsigned vtid, mytid = thr->ts.team_id;
++	
++	for(int i = 0; i < nvictims; i++)
++	{
++		unsigned prob = myrand() & 0xFF;
++		if(prob < wsd->nlprob)
++		{
++			// Find a numa-local core
++			// TODO: This is simple, need to consider real numa topology
++			while((vtid = ((myrand() % wsd->ncores_numa) + leader)) == mytid || vtid >= nthreads);
++			// local steal, vtid = thr->nz_leader
++		}
++		else
++		{
++			// Doesn't matter if it is local or remote
++			// TODO: strictly enfore remote steal
++			while((vtid = myrand() % nthreads) == mytid);
++		}
++
++		struct gomp_thread *vthr = thr->thread_pool->threads[vtid];
++		struct wsd* vwsd = &vthr->wsd;
++		if(MSG_REQ2ROUND(vwsd->req) < vwsd->round)
++		{
++			vwsd->req = MSG_TID2REQ(mytid) | vwsd->round;
++			/* PSTATS */
++			#ifdef XGOMP_PSTATS
++			thr->pstats[STATS_DLB_NREQ_SENT]++;
++			#endif
++			continue;
++		}
++	}
++
++}
++
++
++#if defined(XGOMP_NAWS)
++static inline void migrate_tasks(unsigned long ttid, int n, unsigned long *last_qid)
++{
++	struct gomp_thread *thr = gomp_thread();
++	struct gomp_team *team = thr->ts.team;
++	unsigned long mytid = (unsigned long) thr->ts.team_id;
++	int num_tries = 0;
++	bool target_full = false;
++
++	unsigned long qid = ttid < mytid ? ttid - mytid + team->nthreads : ttid - mytid;
++#ifdef XGOMP_PSTATS
++	unsigned int numa_start = thr->wsd.leader;
++	unsigned int numa_end = numa_start + thr->wsd.ncores_numa;
++#endif
++
++	struct gomp_thread *target_thr;
++	if(team->nthreads <= 1)
++		target_thr = thr;
++	else
++		target_thr = thr->thread_pool->threads[ttid];
++
++	gomp_task_t *task = NULL;
++	// try steall n tasks
++	for(int i = 0; i < n; i++)
++	{		
++		// check if target q is full
++		while(target_thr->td_task_q[qid]->td_deque[target_thr->td_task_q[qid]->td_deque_head] != NULL){
++			num_tries ++;
++			if(num_tries < 25)
++				continue;
++			target_full = true;
++			break;
++		}
++
++		if(target_full){
++			/* PSTATS: dlb req has no steal due to target full */
++			#if defined(XGOMP_PSTATS)
++			if(i == 0){
++				thr->pstats[STATS_DLB_NREQ_TARGET_FULL]++;
++				thr->pstats[STATS_DLB_NREQ_HAS_NO_STEAL]++;
++			}
++			#endif
++
++			break;
++		}
++			
++
++		// target not full, we try steal from aux q for the sake of locality
++		task = (gomp_task_t *) gomp_remove_aux_task(last_qid);
++		if(task == NULL){
++			/* PSTATS: dlb req has no steal due to src empty */
++			#if defined(XGOMP_PSTATS)
++			if(i == 0){
++				thr->pstats[STATS_DLB_NREQ_SRC_EMPTY]++;
++				thr->pstats[STATS_DLB_NREQ_HAS_NO_STEAL]++;
++			}
++			#endif
++
++			break;
++		}
++			
++
++		// target not full, we grab a task, we push to target q
++		struct gomp_taskq *taskq = target_thr->td_task_q[qid];
++
++#if defined(XGOMP_PLOG) || defined(XGOMP_PSTATS)
++		taskq->nin++;
++#endif
++		taskq->td_deque[taskq->td_deque_head] = task;
++		taskq->td_deque_head = (taskq->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
++		target_thr->last_q_accessed = qid;
++#ifdef XGOMP_PSTATS
++		if(ttid >= numa_start && ttid < numa_end)
++		{
++			if(ttid == mytid)
++				thr->pstats[STATS_DLB_NTASK_STOLEN_SELF]++;
++			else
++				thr->pstats[STATS_DLB_NTASK_STOLEN_LOCAL]++;
++		}
++		else
++		{
++			thr->pstats[STATS_DLB_NTASK_STOLEN_REMOTE]++;
++		}
++
++		/* PSTATS: dlb has at least one steal, we record the first occurrance. */
++		if(i == 0){
++			thr->pstats[STATS_DLB_NREQ_HAS_STEAL]++;
++		}
++		/* PSTATS: task pushed by dlb (na-ws)*/
++		thr->pstats[STATS_DLB_NTASK_PUSHED]++;
++#endif
++	}
++}
++
++/* NA-WS's Handle request*/
++static inline void handle_reqs(unsigned long *last_qid)
++{
++	struct gomp_thread *thr = gomp_thread();
++	struct wsd* wsd = &thr->wsd;
++	if(wsd->round == MSG_REQ2ROUND(wsd->req))
++	{
++		// push tasks to thief
++		migrate_tasks((unsigned long) MSG_REQ2TID(wsd->req), wsd->nsteals, last_qid);
++		wsd->round++;
++		/* pstats */
++#ifdef XGOMP_PSTATS
++		thr->pstats[STATS_DLB_NREQ_HANDLED]++;
++#endif
++	}
++}
++#endif // XGOMP_NAWS
++
++#ifdef XGOMP_NARP
++static inline void handle_reqs(unsigned long *last_req_q){
++	struct gomp_thread *thr = gomp_thread();
++	struct wsd *wsd = &thr->wsd;
++	if(wsd->flag == NARP_IDLE && wsd->redirect_tid == -1 && wsd->round == MSG_REQ2ROUND(wsd->req))
++	{
++		// We now push to the thief if we before are not redirecting any tasks.
++		wsd->redirect_tid = MSG_REQ2TID(wsd->req);
++		wsd->nredirect = 0;
++		wsd->flag = NARP_HANDLING_REQ;
++#ifdef XGOMP_PSTATS
++		thr->pstats[STATS_DLB_NREQ_HANDLED]++;
++#endif
++	}
++	// else
++	// {
++	//		rrpush->round ++;
++	// }
++}
++#endif // XGOMP_NARP
++
++#endif // XGOMP_NAWS || XGOMP_NARP
++
++void
++gomp_alloc_task_q(struct gomp_thread *thr)
++{
++	if (thr->num_queues == 0)
++		thr->num_queues = gomp_num_task_queues;
++	
++	thr->last_q = 0;
++	thr->last_q_accessed = 0;
++	
++	thr->td_task_q = (struct gomp_taskq **)gomp_malloc(sizeof(struct gomp_taskq *) * (thr->num_queues)); // with xws
++	for (int queue_id = 0; queue_id < thr->num_queues; queue_id++){
++			thr->td_task_q[queue_id] = (struct gomp_taskq *)gomp_malloc(sizeof(struct gomp_taskq));
++			thr->td_task_q[queue_id]->td_deque = (volatile struct gomp_task **)gomp_malloc(sizeof(struct gomp_task *) * INITIAL_TASK_DEQUE_SIZE);
++			thr->td_deque_size = INITIAL_TASK_DEQUE_SIZE;
++
++			thr->td_task_q[queue_id]->td_deque_head = 0;
++			thr->td_task_q[queue_id]->td_deque_tail = 0;
++
++#if defined(XGOMP_PLOG) || defined(XGOMP_PSTATS)
++			thr->td_task_q[queue_id]->nin = 0;
++			thr->td_task_q[queue_id]->nout = 0;
++#endif
++			for(int i = 0; i < thr->td_deque_size; i++){
++				thr->td_task_q[queue_id]->td_deque[i] = NULL;
++			}
++	}
++	
++#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
++	struct wsd *wsd = &thr->wsd;
++	wsd->round = 1;
++	wsd->req = 0;
++	wsd->leader = thr->ts.team_id / wsd->ncores_numa * wsd->ncores_numa;
++
++#ifdef XGOMP_NARP
++	wsd->flag = NARP_IDLE;
++	wsd->redirect_tid = -1;
++	wsd->nredirect = 0;
++#endif // XGOMP_NARP
++
++#endif // XGOMP_NAWS || XGOMP_NARP
++
++#ifdef XGOMP_PSTATS
++pstats_init();
++#endif // XGOMP_PSTATS
++
++	return;
++};
++
++
++static int
++gomp_push_task(struct gomp_task *task)
++{
++	struct gomp_thread *thr = gomp_thread();
++	struct gomp_team *team = thr->ts.team;
++	unsigned long gtid = (unsigned long)omp_get_thread_num();
++
++	// Check if deque is full
++	int num_tries = 0;
++	unsigned long last_q = thr->last_q;
++	
++	// NARP changes
++	struct gomp_thread *target_thr;
++	unsigned long target_tid;
++
++#ifdef XGOMP_NARP
++	struct wsd *wsd = &thr->wsd;
++	if(wsd->flag == NARP_IDLE){
++#endif // XGOMP_NARP
++		/* Not using redirect push here */
++		target_tid = gtid + last_q; // starting target tid
++		target_tid = (target_tid > team->nthreads - 1) ? (target_tid - team->nthreads) : target_tid;
++#ifdef XGOMP_NARP
++	}else{
++		/**
++		 * Now the last_q starts from the redirect_tid.
++		 * TODO: An alternative is to not update last_q at the end of this function.
++		 */
++		target_tid = (unsigned long) wsd->redirect_tid;
++		last_q = target_tid < gtid ? target_tid - gtid + team->nthreads : target_tid - gtid;
++	}
++#endif // XGOMP_NARP
++		// TODO: this is other ways to make sure it is serial
++	if (team->nthreads <= 1)
++		target_thr = thr;
++	else
++		target_thr = thr->thread_pool->threads[target_tid]; //ww: does this pointer the same across threads? - seems so
++
++	/* XQueue: check target queue availability*/
++	while (target_thr->td_task_q[last_q]->td_deque[target_thr->td_task_q[last_q]->td_deque_head] != NULL){
++		num_tries++;
++		if (num_tries < 25)
++			continue;
++
++/* PSTATS: task not pushed because target queue full */
++#ifdef XGOMP_PSTATS
++#ifdef XGOMP_NARP
++	/**
++	 * Record static push/not push when NA-RP is idle
++	 * Else it is considered as a not-pushed task by the DLB.
++	 * Current request is also considered as failed if it steals none.
++	*/
++	if(wsd->flag == NARP_IDLE){
++		thr->pstats[STATS_STATIC_NTASK_NOT_PUSHED]++;
++	}else{
++		thr->pstats[STATS_DLB_NTASK_NOT_PUSHED]++;
++		if(wsd->nredirect <= 0){
++			// For NA-RP, both no-steal and target-full results from target is full,
++			// we keep no-steal as redundancy for sanity check
++			thr->pstats[STATS_DLB_NREQ_HAS_NO_STEAL]++;
++			thr->pstats[STATS_DLB_NREQ_TARGET_FULL]++;
++		}
++	}
++		
++#else
++		thr->pstats[STATS_STATIC_NTASK_NOT_PUSHED]++;
++#endif // XGOMP_NARP
++#endif // XGOMP_PSTATS
++
++#ifdef XGOMP_NARP
++		/* Reset flags for a new NARP because target is full */
++		wsd->flag = NARP_IDLE;
++		wsd->redirect_tid = -1;
++		wsd->nredirect = 0;
++		wsd->round++;
++#endif // XGOMP_NARP
++		// We move to next queue in case target is full, casuing sequential execution of current thread.
++		if(target_tid == gtid){
++			if (thr->num_queues > 1){
++				last_q++;
++				if (last_q < thr->num_queues)
++					thr->last_q = last_q;
++				else
++					thr->last_q = 0;
++				}
++		}
++
++		return TASK_NOT_PUSHED;
++	}
++
++	/* XQueue: task push routine */
++	struct gomp_taskq *task_q = target_thr->td_task_q[last_q];
++#if defined(XGOMP_PLOG) || defined(XGOMP_PSTATS)
++	task_q->nin++; // Doesn't matter if it is reordered by the CPU/compiler
++#endif
++	task_q->td_deque[task_q->td_deque_head] = task;
++	task_q->td_deque_head = (task_q->td_deque_head + 1) & TASK_DEQUE_MASK(thr);
++	target_thr->last_q_accessed = last_q;
++
++/* PSTATS: task pushed */
++#ifdef XGOMP_PSTATS
++#ifdef XGOMP_NARP
++	// NA-RP
++	unsigned long mytid = (unsigned long) thr->ts.team_id;
++	unsigned int numa_start = wsd->leader;
++	unsigned int numa_end = numa_start + wsd->ncores_numa;
++	if(wsd->flag == NARP_IDLE)
++		thr->pstats[STATS_STATIC_NTASK_PUSHED]++; // record na-rp's static task push
++	else{
++		thr->pstats[STATS_DLB_NTASK_PUSHED]++; // record na-rp's dlb task push
++		// TODO: also decide task locality of this stolen task
++		if(target_tid >= numa_start && target_tid < numa_end)
++		{
++			if(target_tid == mytid)
++				thr->pstats[STATS_DLB_NTASK_STOLEN_SELF]++;
++			else
++				thr->pstats[STATS_DLB_NTASK_STOLEN_LOCAL]++;
++		}
++		else
++		{
++			thr->pstats[STATS_DLB_NTASK_STOLEN_REMOTE]++;
++		}
++	}
++		
++#else
++	// XGOMPTB
++	thr->pstats[STATS_STATIC_NTASK_PUSHED]++; // static task push
++#endif // XGOMP_NARP
++#endif // XGOMP_PSTATS
++		
++#ifdef XGOMP_NARP
++	/**
++	 * Reset the flag, redirect_tid and nredirects if
++	 * - The task is pushed successfully
++	 * - Currently we are redirecting tasks
++	 * - Including this task, nredirect >= nsteals
++	 * We do
++	 * - Reset everything
++	 * - Increment the round since we fullfilled this round
++	 */
++	if(wsd->flag == NARP_HANDLING_REQ && ++wsd->nredirect >= wsd->nsteals)
++	{
++		wsd->flag = NARP_IDLE;
++		wsd->redirect_tid = -1;
++		wsd->nredirect = 0;
++		wsd->round++;
++		/* PSTATS: req has steal */
++		#ifdef XGOMP_PSTATS
++		thr->pstats[STATS_DLB_NREQ_HAS_STEAL]++;
++		#endif // XGOMP_PSTATS
++	}
++#endif // XGOMP_NARP
++
++		if (thr->num_queues > 1){
++			last_q++;
++			if (last_q < thr->num_queues)
++				thr->last_q = last_q;
++			else
++				thr->last_q = 0;
++		}
++		return TASK_SUCCESSFULLY_PUSHED;
++};
++
++static gomp_task_t* 
++gomp_remove_my_task()
++{
++	gomp_task_t *task;
++	struct gomp_thread *thr = gomp_thread();
++
++	if (thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_tail] == NULL)
++		return NULL;
++	task = (gomp_task_t *) thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_tail];
++	thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_tail] = NULL;
++	thr->td_task_q[0]->td_deque_tail = (thr->td_task_q[0]->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
++#if defined(XGOMP_PLOG) || defined(XGOMP_PSTATS)
++	thr->td_task_q[0]->nout++;
++#endif
++	return task;
++};
++
++static gomp_task_t*
++gomp_remove_aux_task(unsigned long *last_qid)
++{
++	gomp_task_t *task;
++	struct gomp_thread *thr = gomp_thread();
++
++	task = NULL;
++	struct gomp_taskq *task_q= NULL;
++	/* Try pop from last accessed queue */
++	if(thr->last_q_accessed > 0){
++		task_q = thr->td_task_q[thr->last_q_accessed];
++		if (task_q->td_deque[task_q->td_deque_tail] != NULL){
++			task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
++			task_q->td_deque[task_q->td_deque_tail] = NULL;
++			task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
++			*last_qid = thr->last_q_accessed;
++		}
++			
++	}
++	/* Try pop from last queue */
++	if(task == NULL){
++		for(unsigned long queue_id = *last_qid; queue_id > 0; queue_id --){
++			task_q = thr->td_task_q[queue_id];
++			if (task_q->td_deque[task_q->td_deque_tail] != NULL){
++				task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
++				task_q->td_deque[task_q->td_deque_tail] = NULL;
++				task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
++				*last_qid = queue_id;
++				break;
++			}
++		}
++	}
++	/* Try pop from queue starting from the first queue */
++	if(task == NULL){
++		for(unsigned long queue_id = thr->num_queues - 1; queue_id > *last_qid; queue_id --){
++			task_q = thr->td_task_q[queue_id];
++			if (task_q->td_deque[task_q->td_deque_tail] != NULL){
++				task = (gomp_task_t *) task_q->td_deque[task_q->td_deque_tail];
++				task_q->td_deque[task_q->td_deque_tail] = NULL;
++				task_q->td_deque_tail = (task_q->td_deque_tail + 1) & TASK_DEQUE_MASK(thr);
++				*last_qid = (queue_id);
++				break;
++			}
++		}
++	}
++#if defined(XGOMP_PLOG) || defined(XGOMP_PSTATS)
++	if(__builtin_expect(task != NULL,1))
++		task_q->nout++;
++#endif
++	return task;
++};
++
++
++/** author: ww
++ * xflag_init has to be called after thread_dock, before the threads running actual tasks,
++ * so the threads in thread_pool are in place.
++ * and this should be called only once when thread starts, and for master thread after thread is created
++ * FIXME: When entering the 2nd parallel region and so on, the xflag_init hasn't been called anywhere,
++ * I would assume that xflag_init is called only once by each thread.
++*/
++void xflag_init(struct gomp_thread *thr)
++{
++	struct xflag *flag = &thr->xflag;
++	flag->thr = thr;
++	int tid = thr->ts.team_id;
++	flag->state = XFLAG_STATE_RUNNING;
++	flag->gathered = 0;
++	flag->on_release = false;
++	flag->parent = tid == 0 ? NULL : &thr->thread_pool->threads[(tid-1)/2]->xflag;
++	flag->nchild = 0;
++	for(int i = 0; i < XFLAG_TREE_DEGREE; i++)
++	{
++		int child_tid = tid * 2 + i + 1;
++		if(child_tid < thr->ts.team->nthreads)
++		{
++			flag->child[i] = &thr->thread_pool->threads[child_tid]->xflag;		
++			flag->nchild++;
++		}
++		else
++		{
++			flag->child[i] = NULL;
++		}
++		GOMP_ATOMIC_ST_REL(&flag->child_done[i], 0);
++	}
++	flag->cidx = !(tid & 1);
++}
++/** author: ww
++ * xflag_reinit is called when the thread is leaving the current barrier.
++ * We pass gomp's barrier state so to align the state of the flag with the barrier's generation.
++ * TODO: This is seems to be optimizable, instead of we store the state, we can just use the bar's state.
++ * I think it is safer to reset the parents' child_done to 0, so that this var to other thread is ready-only
++ * This can reduce complexity of thinking IMO.
++ * 
++*/
++
++void xflag_reinit(struct gomp_thread *thr, gomp_barrier_state_t bs)
++{
++	// xtask_debug(0, 1, "xflag_reinit, tid=%d, bs=%d", thr->ts.team_id, bs);
++	struct xflag *flag = &thr->xflag;
++	flag->state = XFLAG_STATE_RUNNING;
++	flag->gathered = bs;
++	flag->on_release = false;
++	if(flag->parent && flag->thr->ts.team_id != 0)
++	{
++		GOMP_ATOMIC_ST_REL(&flag->parent->child_done[flag->cidx], 0);
++	}
++}
++
++/** author: ww
++ * xflag_release can only be called by the root thread (thr->ts.team_id == 0).
++ * We are modifying other threads' data structure, so we have to be careful.
++ * We can modify other threads because this is only called once by the root, and after the threads are gathered.
++ * We call xflag_release when the following conditions are met.
++ * 1. xflag_gathered has been called once by the root <- this is to make sure all threads enters the current barrier
++ * 2. xflag_done has been called by the root, and it finds that all the children are done.
++ * 3. call xflag_release by the root.
++*/
++static void xflag_release(struct xflag *flag)
++{
++	flag->on_release = true;
++	for(int i = 0; i < flag->nchild; i++)
++	{
++		xflag_release(flag->child[i]);
++	}
++}
++
++/** author: ww
++ * xflag_gathered ensures that xflag_done can pass the first condition when the last barrier is reached,
++ * this is to prevent xflag_done is called before some thread don't reach the barrier, and it is possible
++ * that xflag_init hasn't been called by that thread, so we prevent thread from even accessing the data structure
++ * of different thread.
++ * FIXME: idk if this is really necessary, but I think it is better to be safe than sorry.
++ * The last thread entering the bar do a broadcast to all the other threads, setting the flag gathered to true
++ * the val root has to be carefully set by thread, in case it is the root, it has to be true
++*/
++static void xflag_gathered(struct xflag *flag, bool root, gomp_barrier_state_t bs)
++{
++	bs = bs & ~BAR_WAS_LAST;
++	// xtask_debug(0, 0, "bs=%d, gathered=%d", bs, flag->gathered);
++	if(root)
++	{
++		// xtask_debug(0, 0, "tid: %d, nchild=%d, flag=%p, parent=(%d)%p, gathered=%d, on_release=%d", 
++		// flag->thr->ts.team_id, 
++		// flag->nchild,
++		// flag,
++		// flag->parent ? flag->parent->thr->ts.team_id : 0,
++		// flag->parent,
++		// flag->gathered,
++		// flag->on_release
++		// );
++		flag->gathered = bs + BAR_INCR;
++		for(int i = 0; i < flag->nchild; i++)
++		{
++			xflag_gathered(flag->child[i], true, bs);
++		}
++	}else{
++		xflag_gathered(flag->parent, flag->parent->thr->ts.team_id == 0, bs);
++	}
++}
++
++/** author: ww
++ * we need to first remove BAR_WAS_LAST since not sure how it can be used
++ * TODO: so the barrier and flag don't handle cancel, future work is to handle cancel
++ * gathered flag is only set when xflag_gathered is called,
++ * and xflag_gathered is called only when the last thread enters the barrier with current bar's state
++ * before gathered, the gathered should be state
++ * after gathered, the gathered should be state + BAR_INCR, so we should wait for current generation
++*/
++static void xflag_done(struct xflag * flag, gomp_barrier_state_t bs)
++{
++	bs = bs & ~BAR_WAS_LAST;
++
++	if(flag->gathered!= bs + BAR_INCR)
++		return;
++	if(flag->state == XFLAG_STATE_DONE)
++		return;
++	bool done = true;
++	for(int i = 0; i < flag->nchild; i++)
++		done &= GOMP_ATOMIC_LD_ACQ(&flag->child_done[i]);
++	done &= !GOMP_ATOMIC_LD_ACQ(&flag->thr->task->td_incomplete_child_tasks);
++
++	if(done)
++	{
++		// this can only set once
++		flag->state = XFLAG_STATE_DONE;
++		// if we are the root, and all the children are done, release the children
++		if(flag->thr->ts.team_id == 0)
++		{
++			xflag_release(flag);
++			return;
++		}
++		// if not, we set our bit at parent to 1 (done)
++		GOMP_ATOMIC_ST_REL(&flag->parent->child_done[flag->cidx], 1);
++		// xtask_debug(0, 0, "done, nchild=%d, child=%ld, %ld, cidx=%d, parent's child = %ld, %ld, parentflag=%p",
++		// flag->nchild,
++		// flag->child_done[0], flag->child_done[1], flag->cidx
++		// , flag->parent->child_done[0], flag->parent->child_done[1],
++		// flag->parent);
++	}
++}
++
++/**
++ * XPerflog - record timestamps and corresponding hfref number
++*/
++#ifdef XGOMP_PLOG
++#include <stdio.h>
++#define XPERFLOG_PATH "/stor/auxiliary/wwang/xperlog/tmp/xperflog_%d_%d.csv"
++
++static inline unsigned long long xperflog_get_new_fref(xperf_type_t event){
++	struct gomp_thread *thr = gomp_thread();
++	struct xperflog *perflog = &thr->xperflog;
++	return ++perflog->frefc[event];
++}
++
++static inline unsigned long long xperflog_get_fref(xperf_type_t event){
++	struct gomp_thread *thr = gomp_thread();
++	struct xperflog *perflog = &thr->xperflog;
++	return perflog->frefc[event];
++}
++
++void xperflog_init(){
++	struct gomp_thread *thr = gomp_thread();
++	struct xperflog *perflog = &thr->xperflog;
++	perflog->xperflog_path = getenv("XPERFLOG_PATH");
++	
++	// team thread's init may be called multiple times, prevent this by checking generation
++	if(perflog->generation){
++		return;
++	}
++	perflog->fp = NULL;
++	// append tid to the filename
++	snprintf(perflog->filename, 256, "%s/xperflog_%d_%d.csv", perflog->xperflog_path, thr->ts.team_id, perflog->generation);
++	perflog->log = (xperflog_cell_t *)gomp_malloc(sizeof(xperflog_cell_t) * XPERFLOG_MAX_EVENTS);
++	perflog->eidx = 0;
++	perflog->last_q = 0;
++	perflog->is_stalling = false;
++
++	
++	// init frame reference counters array
++	for(int i = 0; i < XPERF_N_EVENTS; i++)
++		perflog->frefc[i] = 0;
++	
++	unsigned long long tref = xperflog_get_new_fref(XPERF_THREAD);
++	xperflog_record(XPERF_THREAD, tref, tref);
++	perflog->generation++;
++}
++
++/** 
++ * xperflog_record - record timestamps and corresponding hfref(frame reference) number
++ * @param event: xperf_type_t, the event type, can be combination of flags, e.g.
++ * XPERF_TASK_END | XPERF_TASKWAIT means task end and then taskwait starts
++ * @param hfref: unsigned long long, the frame reference number of event with higher bits as the event type
++ * e.g. here hfref is XPERF_TASK_END's frame reference number
++ * @param lfref: unsigned long long, the frame reference number of event with lower bits as the event type
++*/
++void xperflog_record(xperf_type_t event, unsigned long long hfref, unsigned long long lfref){
++	struct gomp_thread *thr = gomp_thread();
++	struct xperflog *perflog = &thr->xperflog;
++	if(perflog->eidx >= XPERFLOG_MAX_EVENTS){
++		xtask_debug(0, 0, "**ERROR** : perflog is full.");
++		exit(1);
++		return;
++	}
++
++	if(LEVENT(event) == XPERF_STALL && perflog->is_stalling)
++		return;
++
++	if(HEVENT(event) == XPERF_STALL_END && !perflog->is_stalling)
++		return;
++
++	if(LEVENT(event) == XPERF_STALL)
++		perflog->is_stalling = true;
++	else
++		perflog->is_stalling = false;
++
++
++	// perflog->ts[perflog->eidx] = __rdtsc();
++	unsigned int aux;
++	perflog->log[perflog->eidx].ts = __rdtscp(&aux);	
++	perflog->log[perflog->eidx].event = event;
++	perflog->log[perflog->eidx].hfref = hfref;
++	perflog->log[perflog->eidx].lfref = lfref;
++	// record sample task count
++
++	if(event > XPERF_THREAD){
++		// for(int i = 0; i < 4; i++){
++			// perflog->last_q = perflog->last_q + i < thr->num_queues ? perflog->last_q + i : (perflog->last_q + i) % thr->num_queues;
++			// xtask_debug(0, 0, "xperf - record: last_q=%d, num_queues=%d", perflog->last_q, thr->num_queues);
++			perflog->ssum +=(long long)(thr->td_task_q[perflog->last_q]->nin - thr->td_task_q[perflog->last_q]->nout);
++			perflog->last_q = perflog->last_q + 1 >= thr->num_queues ? 0 : perflog->last_q + 1;
++		// }
++		if(event > XPERF_THREAD)
++			perflog->log[perflog->eidx].sample_qsize = perflog->ssum;
++
++
++		/* 
++		If previous event is task start, then any spent before current event is considered as tasking time;
++		If previous event is and end event only, any time in between is considered as tasking time;
++		*/
++		if (LEVENT(perflog->log[perflog->eidx - 1].event) == XPERF_TASK || !LEVENT(perflog->log[perflog->eidx - 1].event)){
++			
++			thr->task->task_len += perflog->log[perflog->eidx].ts - perflog->log[perflog->eidx - 1].ts;
++		}
++		
++		if(HEVENT(event) == XPERF_TASK_END){
++			perflog->log[perflog->eidx].value = thr->task->task_len;
++			// xtask_debug(0, 0, "task_len=%lld", thr->task->task_len);
++		}
++
++		// We can still access the current task, just finished task, since we haven't invalidated the task yet
++		#ifdef ENABLE_PERFSTATS
++		if(event == XPERF_TASK_END)
++			perflog->log[perflog->eidx].sample = (long long)(thr->task->src_tid);
++		#endif
++	}
++
++	perflog->eidx++;
++}
++
++void xperflog_wait(){
++	struct gomp_thread *thr = gomp_thread();
++	struct gomp_team *team = thr->ts.team;
++	GOMP_ATOMIC_DEC(&team->xperflog_awaited);
++	int zero = 0;
++	int nthreads = team->nthreads;
++	while(GOMP_ATOMIC_LD_ACQ(&team->xperflog_awaited)!=nthreads && GOMP_ATOMIC_CMPXCHG(&team->xperflog_awaited, &zero, nthreads) != 1){
++		zero = 0;
++	}
++}
++
++/**
++ * Now this should be called by the users with the wrapper
++ * And it has to be called under the omp parallel region
++*/
++void xperflog_dump(struct gomp_thread *thr){
++	// xtask_debug(0, 0, "dumping");
++	// the following is a bit anti-pattern.
++	xperflog_record(XPERF_THREAD_END | XPERF_DUMP, xperflog_get_fref(XPERF_THREAD), xperflog_get_fref(XPERF_DUMP)); // record this in href
++
++ 	struct xperflog *perflog = &thr->xperflog;
++	perflog->fp = (void *)fopen(perflog->filename, "w");
++	if(perflog->fp == NULL){
++		xtask_debug(0, 0, "xperf - dump: file pointer is null.");
++		return;
++	}
++
++	// lets first do this using fprintf to output as csv file
++	fprintf(perflog->fp, "timestamp,event,hfref,lfref,sample_qsize,value\n");
++	for(unsigned long long i = 0; i < perflog->eidx; i++){
++		fprintf(perflog->fp, "%llu,%d,%llu,%llu,%lld,%llu\n", 
++		perflog->log[i].ts, 
++		perflog->log[i].event, 
++		perflog->log[i].hfref, 
++		perflog->log[i].lfref,  
++		perflog->log[i].sample_qsize,
++		perflog->log[i].value);
++	}
++
++	fclose(perflog->fp);
++	perflog->fp = NULL;
++
++	// put a bar here
++	// xperflog_wait();
++}
++
++/**
++ * This can only be called after init, and the generation is gaurantted to be > 0
++*/
++void xperflog_reset(struct gomp_thread *thr){
++	struct xperflog *perflog = &thr->xperflog;
++	if(perflog->fp){
++		fclose(perflog->fp);
++		perflog->fp = NULL;
++	}
++	perflog->eidx = 0;
++	perflog->last_q = 0;
++	// init frefc
++	for(int i = 0; i < XPERF_N_EVENTS; i++)
++		perflog->frefc[i] = 0;
++	
++	// assign new filename
++	snprintf(perflog->filename, 64, "%s/xperflog_%d_%d.csv", perflog->xperflog_path, thr->ts.team_id, perflog->generation);
++	unsigned long long tref = xperflog_get_new_fref(XPERF_THREAD);
++	xperflog_record(XPERF_THREAD, tref, tref); // record this in lfref
++	perflog->generation++;
++}
++
++static inline void xperflog_done(struct gomp_thread *thr){
++	if(thr->xperflog.fp){
++		fclose(thr->xperflog.fp);
++	}
++}
++
++void xperflog_dump_reset(){
++	struct gomp_thread *thr = gomp_thread();
++	xperflog_dump(thr);
++	xperflog_reset(thr);
++	// xperflog_done(thr);
++}
++#endif // XGOMP_PLOG
++
++/**
++ * Interfaces that can be called by the user
++ * xomp_perf_dump: dump the perflog to the file
++ * xomp_perflog_reset: reset the perflog
++*/
++
++void xomp_perf_dump(void){
++	struct gomp_thread *thr = gomp_thread();
++	#ifdef XGOMP_PLOG
++	if(thr->ts.team_id == 0)
++		xtask_debug(0, 0, "Dump PERFLOG to: %s", thr->xperflog.xperflog_path);
++	xperflog_dump(thr);
++	#else
++	// if(thr->ts.team_id == 0)
++	// 	xtask_debug(0, 0, "PLOG: Perflog is not enabled.");
++	#endif // XGOMP_PLOG
++	thr->gen++;
++	#ifdef XGOMP_PSTATS
++	if(thr->ts.team_id == 0)
++	{
++		unsigned long long sum[STATS_SIZE] = {0};
++		for(unsigned int i = 0; i < thr->ts.team->nthreads; i++)
++		{
++			struct gomp_thread *t = thr->thread_pool->threads[i];
++			for(int j = 0; j < STATS_SIZE; j++){
++				sum[j] += t->pstats[j];
++			}
++		}
++		
++		xtask_debug(0, 0, "PSTATS: "
++		"gen=%d,"
++		"ntask_total=%llu," // total tasks
++		"ntask_exec_self=%llu," // tasks executed by self/immediately
++		"ntask_exec_local=%llu," // tasks executed by NUMA-local cores/threads
++		"ntask_exec_remote=%llu,"// tasks executed by NUMA-remote cores/threads
++		"ntask_static_pushed=%llu," // static task push
++		"ntask_static_not_pushed=%llu," // static task not push
++		#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
++		"nreq_dlb_sent=%llu," // number of requests sent
++		"nreq_dlb_handled=%llu," // number requests handled
++		"nreq_dlb_has_steal=%llu," // number of request that results in successful steal
++		"nreq_dlb_has_no_steal=%llu," // number of request that results in no steal
++		"nreq_dlb_target_full=%llu," // number of request fails because the target queue is full
++
++		#if defined(XGOMP_NAWS)
++		"nreq_dlb_src_empty=%llu," // (NA-WS) number of request fails because the source queue is empty
++		#endif // XGOMP_NAWS
++
++		"ntask_dlb_pushed=%llu," // number of tasks pushed by DLB
++		"ntask_dlb_not_pushed=%llu," // number of tasks not pushed by DLB
++
++		"ntask_dlb_stolen_self=%llu," // number of tasks stolen by self
++		"ntask_dlb_stolen_local=%llu," // number of tasks stolen by NUMA-local cores/threads
++		"ntask_dlb_stolen_remote=%llu" // number of tasks stolen by NUMA-remote cores/threads
++		#endif // XGOMP_NAWS || XGOMP_NARP
++		,
++		thr->gen,
++		sum[STATS_NTASK],
++		sum[STATS_NTASK_EXEC_SELF],
++		sum[STATS_NTASK_EXEC_LOCAL],
++		sum[STATS_NTASK_EXEC_REMOTE],
++		// static
++		sum[STATS_STATIC_NTASK_PUSHED],
++		sum[STATS_STATIC_NTASK_NOT_PUSHED]
++		#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
++		,
++		sum[STATS_DLB_NREQ_SENT],
++		sum[STATS_DLB_NREQ_HANDLED],
++		sum[STATS_DLB_NREQ_HAS_STEAL],
++		sum[STATS_DLB_NREQ_HAS_NO_STEAL],
++		sum[STATS_DLB_NREQ_TARGET_FULL],
++
++		#if defined(XGOMP_NAWS)
++		sum[STATS_DLB_NREQ_SRC_EMPTY],
++		#endif // XGOMP_NAWS
++
++		sum[STATS_DLB_NTASK_PUSHED],
++		sum[STATS_DLB_NTASK_NOT_PUSHED],
++
++		sum[STATS_DLB_NTASK_STOLEN_SELF],
++		sum[STATS_DLB_NTASK_STOLEN_LOCAL],
++		sum[STATS_DLB_NTASK_STOLEN_REMOTE]
++		#endif
++		);
++	}
++	#endif
++}
++
++
++void xomp_perflog_info(void){
++	#ifdef XGOMP_PLOG
++	struct gomp_thread *thr = gomp_thread();
++	struct xperflog *perflog = &thr->xperflog;
++	xtask_debug(0, 0, 
++		"xperflog - info: tid=%d, eidx=%llu, last_q=%d, generation=%d, xperflog_path=%s, filename=%s",
++		thr->ts.team_id, perflog->eidx, perflog->last_q, perflog->generation, perflog->xperflog_path, perflog->filename
++	);
++	#endif // XGOMP_PLOG
++}
++
++#endif // GOMP_USE_XQUEUE
++
+ /* Create a new task data structure.  */
+ 
+ void
+@@ -89,6 +1092,14 @@ gomp_init_task (struct gomp_task *task, struct gomp_task *parent_task,
+   task->final_task = false;
+   task->copy_ctors_done = false;
+   task->parent_depends_on = false;
++#ifdef GOMP_USE_XQUEUE
++  GOMP_ATOMIC_ST_RLX(&task->td_incomplete_child_tasks, 0);
++
++#ifdef XGOMP_PLOG
++ task->task_len = 0;
++#endif
++
++#endif
+ }
+ 
+ /* Clean up a task, after completing it.  */
+@@ -352,10 +1363,17 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
+ 	   long arg_size, long arg_align, bool if_clause, unsigned flags,
+ 	   void **depend, int priority_arg, void *detach)
+ {
++
++#if defined(XGOMP_PLOG) // perflog is defined only if GOMP_USE_XQUEUE is defined
++	unsigned long long gomp_task_fref = xperflog_get_new_fref(XPERF_THREAD);
++	xperflog_record(XPERF_GOMP_TASK, gomp_task_fref, gomp_task_fref);
++#endif // XGOMP_PLOG
+   struct gomp_thread *thr = gomp_thread ();
+   struct gomp_team *team = thr->ts.team;
+   int priority = 0;
+ 
++	
++	
+ #ifdef HAVE_BROKEN_POSIX_SEMAPHORES
+   /* If pthread_mutex_* is used for omp_*lock*, then each task must be
+      tied to one thread all the time.  This means UNTIED tasks must be
+@@ -365,6 +1383,26 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
+     if_clause = false;
+   flags &= ~GOMP_TASK_FLAG_UNTIED;
+ #endif
++  
++#ifdef GOMP_USE_XQUEUE
++	/*
++	We are not going to use xq if there are incompat task clauses.
++	FIXME: However, this is only a temporary solution and is not theoretically correct. I could break when user mix the usage
++	of task clauses, when xtask can be enabled for some constructs while not for others - because race condition could occur.
++	TODO: We need information regarding whether users use other clauses before runtime starts.
++	flags & GOMP_TASK_FLAG_UNTIED: 1 - untied
++	!(flags & ~GOMP_TASK_FLAG_UNTIED): 1 - only untied
++	UPDATE: Now this is fixed by letting compiler pass flags to teams, if flags & 32, then we will use xq.
++	thr->xq has been set when threads are started by the gomp_team_start
++	*/
++	// thr->use_xq = (flags & GOMP_TASK_FLAG_UNTIED) && !(flags & ~GOMP_TASK_FLAG_UNTIED) && (thr->use_xq);
++	// // thr->use_xq = false;
++	// // xtask_debug(0,0, "flags=%d", flags);
++	bool use_xq = thr->use_xq;
++	if(thr->td_task_q == NULL)
++		gomp_alloc_task_q(thr);
++#endif
++
+ 
+   /* If parallel or taskgroup has been cancelled, don't start new tasks.  */
+   if (__builtin_expect (gomp_cancel_var, 0) && team)
+@@ -456,14 +1494,21 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
+ 	 child thread, but seeing a stale non-NULL value is not a
+ 	 problem.  Once past the task_lock acquisition, this thread
+ 	 will see the real value of task.children.  */
++#ifdef GOMP_USE_XQUEUE
++	if(__builtin_expect(!use_xq, 0))  // if not use xq - begin
++	{
++#endif
+       if (!priority_queue_empty_p (&task.children_queue, MEMMODEL_RELAXED))
+ 	{
+ 	  gomp_mutex_lock (&team->task_lock);
+ 	  gomp_clear_parent (&task.children_queue);
+ 	  gomp_mutex_unlock (&team->task_lock);
+ 	}
+-      gomp_end_task ();
+-    }
++	gomp_end_task ();
++#ifdef GOMP_USE_XQUEUE
++	} // if not use xq - end
++#endif	
++}
+   else
+     {
+       struct gomp_task *task;
+@@ -509,6 +1554,9 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
+       task->fn = fn;
+       task->fn_data = arg;
+       task->final_task = (flags & GOMP_TASK_FLAG_FINAL) >> 1;
++	  #ifdef GOMP_USE_XQUEUE
++	  if(__builtin_expect(!use_xq, 0))
++	  #endif
+       gomp_mutex_lock (&team->task_lock);
+       /* If parallel or taskgroup has been cancelled, don't start new
+ 	 tasks.  */
+@@ -518,6 +1566,9 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
+ 	  if (gomp_team_barrier_cancelled (&team->barrier))
+ 	    {
+ 	    do_cancel:
++		#ifdef GOMP_USE_XQUEUE
++		if(__builtin_expect(!use_xq, 0))
++		#endif
+ 	      gomp_mutex_unlock (&team->task_lock);
+ 	      gomp_finish_task (task);
+ 	      free (task);
+@@ -547,11 +1598,60 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
+ 		 dependencies have been satisfied.  After which, they
+ 		 can be picked up by the various scheduling
+ 		 points.  */
++		 #ifdef GOMP_USE_XQUEUE
++		if(__builtin_expect(!use_xq, 0))
++		#endif
+ 	      gomp_mutex_unlock (&team->task_lock);
+ 	      return;
+ 	    }
+ 	}
+-
++#ifdef GOMP_USE_XQUEUE
++	if(use_xq)
++	{
++		GOMP_ATOMIC_INC(&task->parent->td_incomplete_child_tasks);
++		#ifdef XGOMP_PSTATS
++		task->src_tid = thr->ts.team_id; // record task source thread id
++		thr->pstats[STATS_NTASK]++; // increment task count
++		#endif
++
++		if(gomp_push_task (task) == TASK_NOT_PUSHED){
++		
++			// execute it right away
++			task->kind = GOMP_TASK_TIED;
++			thr->task = task;
++			#ifdef XGOMP_PLOG
++			unsigned long long task_fref = xperflog_get_new_fref(XPERF_TASK);
++			xperflog_record(XPERF_GOMP_TASK_END | XPERF_TASK, gomp_task_fref,  task_fref);
++			#endif // XGOMP_PLOG
++
++
++			task->fn(task->fn_data);
++
++			/* pstats */
++			#ifdef XGOMP_PSTATS
++			thr->pstats[STATS_NTASK_EXEC_SELF]++;
++			#endif
++
++			#ifdef XGOMP_PLOG
++			xperflog_record(XPERF_TASK_END | XPERF_GOMP_TASK, task_fref, gomp_task_fref);
++			#endif // XGOMP_PLOG
++			thr->task = parent;
++			GOMP_ATOMIC_DEC(&task->parent->td_incomplete_child_tasks);
++			gomp_finish_task(task);
++			free(task);
++			#ifdef XGOMP_PLOG
++			xperflog_record(XPERF_GOMP_TASK_END, gomp_task_fref, gomp_task_fref);
++			#endif // XGOMP_PLOG
++			return;
++		}
++		#ifdef XGOMP_PLOG
++		xperflog_record(XPERF_GOMP_TASK_END, gomp_task_fref, gomp_task_fref);
++		#endif // XGOMP_PLOG
++		return;
++	}
++	else
++	{ //!xq - begin
++#endif
+       priority_queue_insert (PQ_CHILDREN, &parent->children_queue,
+ 			     task, priority,
+ 			     PRIORITY_INSERT_BEGIN,
+@@ -578,6 +1678,9 @@ GOMP_task (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
+       gomp_mutex_unlock (&team->task_lock);
+       if (do_wake)
+ 	gomp_team_barrier_wake (&team->barrier, 1);
++#ifdef GOMP_USE_XQUEUE
++	} //!xq - end
++#endif
+     }
+ }
+ 
+@@ -1148,6 +2251,14 @@ gomp_task_run_pre (struct gomp_task *child_task, struct gomp_task *parent,
+   child_task->pnode[PQ_TEAM].next = NULL;
+   child_task->pnode[PQ_TEAM].prev = NULL;
+   child_task->kind = GOMP_TASK_TIED;
++  	#ifdef GOMP_USE_XQUEUE
++	// wenyi: if no task in the queue, let the barrier know with clear_task_pending
++	// this is protected by the team task lock
++	// or we can use atomic operation to do similar thing but not using their barrier
++	// the following call must be protected by the team task lock
++	// gomp_team_barrier_clear_task_pending (&team->barrier);
++	// gomp_team_barrier_cancelled (&team->barrier);
++	#endif
+ 
+   if (--team->task_queued_count == 0)
+     gomp_team_barrier_clear_task_pending (&team->barrier);
+@@ -1361,6 +2472,183 @@ gomp_task_run_post_remove_taskgroup (struct gomp_task *child_task)
+     }
+ }
+ 
++
++#ifdef GOMP_USE_XQUEUE
++void xtask_barrier_handle_tasks(gomp_barrier_state_t state){
++	#if defined(XGOMP_PLOG) // GOMP_USE_XQUEUE && XGOMP_PLOG
++	unsigned long long bar_fref = xperflog_get_new_fref(XPERF_BAR);
++	xperflog_record(XPERF_BAR, bar_fref, bar_fref);
++	#endif // GOMP_USE_XQUEUE && XGOMP_PLOG
++	struct gomp_thread *thr = gomp_thread ();
++	struct gomp_task *task = thr->task;
++	struct gomp_task *child_task = NULL;
++	struct gomp_task *to_free = NULL;
++
++#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
++	
++	unsigned long long nwaits = (unsigned long long) thr->wsd.nwaits;
++	unsigned long long nwaited = nwaits;
++#endif // XGOMP_NAWS || XGOMP_NARP
++	
++/* pstats */
++#ifdef XGOMP_PSTATS
++	unsigned int numa_start = thr->leader;
++	unsigned int numa_end = numa_start + thr->ncores_numa;
++#endif // XGOMP_PSTATS
++
++	unsigned long gtid = (unsigned long)omp_get_thread_num();
++	unsigned int use_own_tasks = 1, new_victim = 0;
++	unsigned long last_qid = (thr->num_queues <= gtid) ? 1 : gtid;
++
++	if(gomp_barrier_last_thread(state))
++	{
++		xflag_gathered(&thr->xflag, thr->ts.team_id == 0, state);
++	}
++
++bool cancelled = false;
++while(1)
++{
++	while(1)
++	{
++		cancelled = false;
++		if(use_own_tasks)
++		{
++			child_task = gomp_remove_my_task();
++		}
++
++		if((child_task == NULL) && (thr->num_queues > 1))
++		{
++			use_own_tasks = 0;
++			child_task = gomp_remove_aux_task(&last_qid);
++		}
++		//bogus for victim
++		if(new_victim)
++			new_victim = new_victim;
++
++		// Do Work Stealing
++		if(child_task)
++		{
++			// we handle req here
++			#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
++			handle_reqs(&last_qid);
++			#endif
++
++			#ifdef XGOMP_PLOG
++			xperflog_record(XPERF_STALL_END | XPERF_BAR, bar_fref, bar_fref);
++			#endif // XGOMP_PLOG
++		} 
++		else
++		{
++			// we send req here
++			#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
++			if(nwaited < nwaits){
++				nwaited++;
++			}else{
++				nwaited = 0;
++				send_reqs();
++			}
++			#endif
++
++			#ifdef XGOMP_PLOG
++			xperflog_record(XPERF_BAR_END| XPERF_STALL, bar_fref, bar_fref);
++			#endif // XGOMP_PLOG
++
++			break;
++		}
++
++		if(child_task)
++		{
++			//TODO: handle cancel
++			child_task->kind = GOMP_TASK_TIED;
++			child_task->in_tied_task = true;
++			if (__builtin_expect (cancelled, 0)){
++				if (to_free){
++					gomp_finish_task (to_free);
++					free (to_free);
++					to_free = NULL;
++				}
++				goto finish_cancelled;
++			}
++			task = thr->task;
++			thr->task = child_task;
++			if (__builtin_expect (child_task->fn == NULL, 0))
++			{
++				if (gomp_target_task_fn (child_task->fn_data))
++				{
++					gomp_debug(0, "[tid=%d] wenyi(gomp_barrier_handle_tasks): unexpected.\n", omp_get_thread_num());
++					break;
++				}
++			}
++			else
++			{
++				#ifdef XGOMP_PLOG
++				unsigned long long task_fref = xperflog_get_new_fref(XPERF_TASK);
++				xperflog_record(XPERF_BAR_END | XPERF_TASK, bar_fref, task_fref);
++				#endif // XGOMP_PLOG
++
++				child_task->fn (child_task->fn_data);
++
++				#ifdef XGOMP_PLOG
++				xperflog_record(XPERF_TASK_END | XPERF_BAR, task_fref, bar_fref); // task end can be used to encapsulate the task
++				#endif // XGOMP_PLOG
++
++// #if defined(XGOMP_PSTATS) && (defined(XGOMP_NAWS) || defined(XGOMP_NARP))
++#if defined(XGOMP_PSTATS)
++				/* PSTATS checks task locality */
++				if(child_task->src_tid >= numa_start && child_task->src_tid < numa_end)
++				{
++					if(child_task->src_tid == thr->ts.team_id)
++						thr->pstats[STATS_NTASK_EXEC_SELF]++;
++					else
++						thr->pstats[STATS_NTASK_EXEC_LOCAL]++;
++				}
++				else
++				{
++					thr->pstats[STATS_NTASK_EXEC_REMOTE]++;
++				}
++#endif // XGOMP_PSTATS
++			}
++			thr->task = task;
++		}
++		else
++			break;
++
++		if(!use_own_tasks && thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_head] != NULL)
++		{
++			use_own_tasks = 1;
++			new_victim = 0;	
++		}
++
++		if (child_task)
++		{
++			GOMP_ATOMIC_DEC(&child_task->parent->td_incomplete_child_tasks);
++			finish_cancelled:;
++			to_free = child_task;
++			child_task = NULL;	
++		}
++
++		if (to_free)
++		{
++			gomp_finish_task (to_free);
++			free (to_free);
++			to_free = NULL;
++		}
++	}
++	
++	// task source has been depeleted, set this thread's done, let the parent thread know
++	xflag_done(&thr->xflag, state);
++	if(thr->xflag.on_release)
++	{
++		#ifdef XGOMP_PLOG
++		xperflog_record(XPERF_BAR_END, bar_fref, bar_fref);
++		#endif // XGOMP_PLOG
++		return;
++	}
++}
++ // bar exits here
++}
++#endif
++
+ void
+ gomp_barrier_handle_tasks (gomp_barrier_state_t state)
+ {
+@@ -1510,6 +2798,13 @@ gomp_barrier_handle_tasks (gomp_barrier_state_t state)
+ void
+ GOMP_taskwait (void)
+ {
++#if defined(XGOMP_PLOG) // GOMP_USE_XQUEUE && XGOMP_PLOG
++	unsigned long long taskwait_fref = xperflog_get_new_fref(XPERF_TASKWAIT);
++	xperflog_record(XPERF_TASKWAIT, taskwait_fref, taskwait_fref);
++#endif // GOMP_USE_XQUEUE && XGOMP_PLOG
++
++
++
+   struct gomp_thread *thr = gomp_thread ();
+   struct gomp_team *team = thr->ts.team;
+   struct gomp_task *task = thr->task;
+@@ -1524,12 +2819,225 @@ GOMP_taskwait (void)
+      this point, but we must ensure that all writes to memory by a
+      child thread task work function are seen before we exit from
+      GOMP_taskwait.  */
++#ifdef GOMP_USE_XQUEUE
++#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
++	unsigned long long nwaits = (unsigned long long)thr->wsd.nwaits;
++	unsigned long long nwaited = nwaits;
++#endif // XGOMP_NAWS
++	/* pstats */
++#if defined(XGOMP_PSTATS)
++	unsigned int numa_start = thr->leader;
++	unsigned int numa_end = numa_start + thr->ncores_numa;
++#endif // XGOMP_PSTATS
++	if(__builtin_expect(thr->use_xq, 1))
++	{
++		if (task == NULL)
++		{
++#ifdef XGOMP_PLOG
++			xperflog_record(XPERF_TASKWAIT_END, taskwait_fref, taskwait_fref);
++#endif // XGOMP_PLOG
++			return;
++		}
++	}
++	else
++#endif // GOMP_USE_XQUEUE
+   if (task == NULL
+       || priority_queue_empty_p (&task->children_queue, MEMMODEL_ACQUIRE))
+     return;
+ 
++
+   memset (&taskwait, 0, sizeof (taskwait));
+   bool child_q = false;
++
++#ifdef GOMP_USE_XQUEUE
++	unsigned long gtid = (unsigned long)omp_get_thread_num();
++	unsigned int use_own_tasks = 1, new_victim = 0;
++	unsigned long last_qid = (thr->num_queues <= gtid) ? 1 : gtid;
++	gomp_task_t *next_task;
++	if(__builtin_expect(thr->use_xq, 1))
++	{
++		// has to reimplement our own version of taskwait;
++		while(GOMP_ATOMIC_LD_ACQ(&thr->task->td_incomplete_child_tasks))
++		{
++			// GOMP_taskwait	
++			bool cancelled = false;
++			if (to_free)
++			{
++				gomp_finish_task (to_free);
++				free (to_free);
++				to_free = NULL;
++			}
++
++			next_task = NULL;
++			if(use_own_tasks)
++			{
++				next_task = gomp_remove_my_task();
++			}
++
++			if((next_task == NULL) && (thr->num_queues > 1))
++			{
++				use_own_tasks = 0;
++			
++				next_task = gomp_remove_aux_task(&last_qid);
++			}
++			// Taskwait
++			if(next_task == NULL)
++			{
++				// we send steal requests
++#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
++				if(nwaited < nwaits)
++				{
++					nwaited++;
++				}
++				else
++				{
++					nwaited = 0;
++					send_reqs();
++				}
++#endif // XGOMP_NAWS || XGOMP_NARP
++
++#ifdef XGOMP_PLOG
++				xperflog_record(XPERF_TASKWAIT_END | XPERF_STALL, taskwait_fref, taskwait_fref);
++#endif
++				continue;
++			}
++			else
++			{
++#if defined(XGOMP_NAWS) || defined(XGOMP_NARP)
++				handle_reqs(&last_qid);
++#endif
++				// handle steal
++			}
++			
++			if (next_task->kind == GOMP_TASK_WAITING)
++			{	
++#ifdef XGOMP_PLOG
++				xperflog_record(XPERF_STALL_END | XPERF_TASKWAIT, taskwait_fref, taskwait_fref);
++#endif
++				child_task = next_task;
++				child_task->kind = GOMP_TASK_TIED; // move this out of gomp_task_run_pre, so it only handles barriers
++				child_task->in_tied_task = true;
++				if (__builtin_expect (cancelled, 0)){
++					if (to_free){
++						gomp_finish_task (to_free);
++						free (to_free);
++						to_free = NULL;
++					}
++						goto xtask_finish_cancelled;
++					}
++			}
++			else
++			{
++
++			// ww: TODO: this is also protected by task_lock, need to check if it is necessary
++				gomp_debug(0, "[tid=%d] wenyi(GOMP_taskwait): This should never be reached!\n",omp_get_thread_num());
++			}
++			
++			if (child_task)
++			{
++				// task = thr->task;
++				thr->task = child_task;
++				if (__builtin_expect (child_task->fn == NULL, 0))
++				{
++					if (gomp_target_task_fn (child_task->fn_data))
++					{
++						thr->task = task;
++						//gomp_mutex_lock (&team->task_lock);
++						child_task->kind = GOMP_TASK_ASYNC_RUNNING;
++						struct gomp_target_task *ttask
++							= (struct gomp_target_task *) child_task->fn_data;
++						/* If GOMP_PLUGIN_target_task_completion has run already
++							in between gomp_target_task_fn and the mutex lock,
++							perform the requeuing here.  */
++						if (ttask->state == GOMP_TARGET_TASK_FINISHED)
++							gomp_target_task_completion (team, child_task);
++						else
++							ttask->state = GOMP_TARGET_TASK_RUNNING;
++						child_task = NULL;
++						continue;
++					}
++				}
++				else
++				{
++#ifdef XGOMP_PLOG
++					unsigned long long task_fref = xperflog_get_new_fref(XPERF_TASK);
++					xperflog_record(XPERF_TASKWAIT_END | XPERF_TASK, taskwait_fref, task_fref);
++#endif // XGOMP_PLOG
++
++					child_task->fn (child_task->fn_data);
++
++#ifdef XGOMP_PLOG
++					xperflog_record(XPERF_TASK_END | XPERF_TASKWAIT, task_fref, taskwait_fref); // task end can be used to encapsulate the task
++#endif // XGOMP_PLOG
++
++// #if defined(XGOMP_PSTATS) && (defined(XGOMP_NAWS) || defined(XGOMP_NARP))
++#if defined(XGOMP_PSTATS)
++					/* PSTATS checks task locality */
++					if(child_task->src_tid >= numa_start && child_task->src_tid < numa_end)
++					{
++						if(child_task->src_tid == thr->ts.team_id)
++							thr->pstats[STATS_NTASK_EXEC_SELF]++;
++						else
++							thr->pstats[STATS_NTASK_EXEC_LOCAL]++;
++					}
++					else
++					{
++						thr->pstats[STATS_NTASK_EXEC_REMOTE]++;
++					}
++#endif // XGOMP_PSTATS
++				}
++					
++				thr->task = task; // ww: task resumed
++			}
++			else continue;
++			// gomp_sem_wait (&taskwait.taskwait_sem);
++			// ww: wait in gnu's context indicates nothing in the queue, not suitable for our purpose. NOT SURE if it only waits when there is nothing in both of the queues or if there is nothing in either queues
++			
++			if(!use_own_tasks && thr->td_task_q[0]->td_deque[thr->td_task_q[0]->td_deque_head] != NULL)
++			{
++				use_own_tasks = 1;
++				new_victim = 0;
++			}
++			if(new_victim)
++				new_victim = new_victim;
++			
++			// gomp_mutex_lock(&team->task_lock); was there
++			if(child_task)
++			{
++				// ww: this isn't likely to run
++				if (child_task->detach_team){
++				assert (child_task->detach_team == team);
++				child_task->kind = GOMP_TASK_DETACHED;
++				++team->task_detach_count;
++				gomp_debug (0,
++					"thread %d: task with event %p finished without "
++					"completion event fulfilled in taskwait\n",
++					thr->ts.team_id, child_task);
++				child_task = NULL;
++				continue;
++				}
++
++				GOMP_ATOMIC_DEC(&child_task->parent->td_incomplete_child_tasks);
++		
++				xtask_finish_cancelled:;
++				to_free = child_task;
++				child_task = NULL;
++			}
++		}
++
++		bool destroy_taskwait = task->taskwait != NULL;
++		task->taskwait = NULL;
++		if (destroy_taskwait)
++			gomp_sem_destroy(&taskwait.taskwait_sem);
++	
++		// record the exit of a taskwait
++#ifdef XGOMP_PLOG
++		xperflog_record(XPERF_TASKWAIT_END, taskwait_fref, taskwait_fref);
++#endif // XGOMP_PLOG
++		return;
++	}else{ // taskwait - no-xq begin
++#endif // GOMP_USE_XQUEUE
++
+   gomp_mutex_lock (&team->task_lock);
+   while (1)
+     {
+@@ -1667,6 +3175,9 @@ GOMP_taskwait (void)
+ 	    }
+ 	}
+     }
++#ifdef GOMP_USE_XQUEUE
++	} // taskwait - no-xq end
++#endif
+ }
+ 
+ /* Called when encountering a taskwait directive with depend clause(s).
+@@ -2522,3 +4033,4 @@ omp_fulfill_event (omp_event_handle_t event)
+ }
+ 
+ ialias (omp_fulfill_event)
++ialias (xomp_perflog_info)
+diff --git a/libgomp/taskloop.c b/libgomp/taskloop.c
+index af175f4ac14..1639b2739f2 100644
+--- a/libgomp/taskloop.c
++++ b/libgomp/taskloop.c
+@@ -29,7 +29,7 @@
+ /* Called when encountering an explicit task directive.  If IF_CLAUSE is
+    false, then we must not delay in executing the task.  If UNTIED is true,
+    then the task may be executed by any member of the team.  */
+-
++// # include <stdio.h>
+ void
+ GOMP_taskloop (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
+ 	       long arg_size, long arg_align, unsigned flags,
+@@ -38,6 +38,8 @@ GOMP_taskloop (void (*fn) (void *), void *data, void (*cpyfn) (void *, void *),
+ {
+   struct gomp_thread *thr = gomp_thread ();
+   struct gomp_team *team = thr->ts.team;
++//   gomp_debug(0. "wenyi(GOMP_taskloop): entry.\n");
++//   printf("wenyi: here");
+ 
+ #ifdef HAVE_BROKEN_POSIX_SEMAPHORES
+   /* If pthread_mutex_* is used for omp_*lock*, then each task must be
+diff --git a/libgomp/team.c b/libgomp/team.c
+index cb6875d70fa..3928ebb82eb 100644
+--- a/libgomp/team.c
++++ b/libgomp/team.c
+@@ -60,6 +60,9 @@ struct gomp_thread_start_data
+   unsigned int team_num;
+   bool nested;
+   pthread_t handle;
++#ifdef GOMP_USE_XQUEUE
++  bool use_xq;
++#endif
+ };
+ 
+ 
+@@ -104,6 +107,22 @@ gomp_thread_start (void *xdata)
+   /* Make thread pool local. */
+   pool = thr->thread_pool;
+ 
++#ifdef GOMP_USE_XQUEUE
++	thr->use_xq = data->use_xq;
++#if defined(XGOMP_NARP) || defined(XGOMP_NAWS)
++	// TODO: This could be a bottleneck if they contend?
++	// But maybe not since the thread call is also sequential.
++	if(thr->use_xq)
++		xgomp_getenv();
++#endif // XGOMP_NARP || XGOMP_NAWS
++	if(thr->use_xq && thr->td_task_q == NULL)
++	  	gomp_alloc_task_q(thr);
++#ifdef XGOMP_PLOG
++	xperflog_init();
++#endif // XGOMP_PLOG
++#endif // GOMP_USE_XQUEUE
++
++
+   if (data->nested)
+     {
+       struct gomp_team *team = thr->ts.team;
+@@ -121,15 +140,20 @@ gomp_thread_start (void *xdata)
+       pool->threads[thr->ts.team_id] = thr;
+ 
+       gomp_simple_barrier_wait (&pool->threads_dock);
++	  #ifdef GOMP_USE_XQUEUE
++	  xflag_init(thr);
++	  #endif
+       do
+ 	{
+ 	  struct gomp_team *team = thr->ts.team;
+ 	  struct gomp_task *task = thr->task;
+ 
+ 	  local_fn (local_data);
++
+ 	  gomp_team_barrier_wait_final (&team->barrier);
+ 	  gomp_finish_task (task);
+-
++	//   xtask_debug(0, 0, "thread finished task");
++	//   xtask_debug(0, 0, "before simple barrier wait.");
+ 	  gomp_simple_barrier_wait (&pool->threads_dock);
+ 
+ 	  local_fn = thr->fn;
+@@ -341,6 +365,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
+   pool = thr->thread_pool;
+   task = thr->task;
+   icv = task ? &task->icv : &gomp_global_icv;
++
+   if (__builtin_expect (gomp_places_list != NULL, 0) && thr->place == 0)
+     {
+       gomp_init_affinity ();
+@@ -385,11 +410,47 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
+   team->implicit_task[0].icv.nthreads_var = nthreads_var;
+   team->implicit_task[0].icv.bind_var = bind_var;
+ 
++#ifdef GOMP_USE_XQUEUE
++	// team->use_xq = true; // default to true
++	// thr->use_xq = flags & 32;
++	thr->use_xq = 1;
++#if !defined(XGOMP_NARP) && !defined(XGOMP_NAWS)
++	xtask_debug(0, 0, "XGOMPTB v%s, nthreads=%d, use_xq=%d, nested=%d, level=%d.", XGOMP_VERSION, nthreads, thr->use_xq, nested, thr->ts.level);
++#endif
++  	gomp_num_task_queues = nthreads;
++#if defined(XGOMP_NARP) || defined(XGOMP_NAWS)
++	if(thr->use_xq)
++	{
++		xgomp_getenv();
++#if defined(XGOMP_NARP)
++		xtask_debug(0, 0, "XGOMP-NARP v%s: NThreads=%d, use_xq=%d, nested=%d, level=%d, N_VICTIMS=%d, NSTEALS=%d, NWAITS=%d, NCORES_NUMA=%d, LOCAL_PROB=%d.", 
++		XGOMP_VERSION, nthreads, thr->use_xq, nested, thr->ts.level, thr->wsd.nvictims, thr->wsd.nsteals, thr->wsd.nwaits, thr->wsd.ncores_numa, thr->wsd.nlprob);
++#else
++		xtask_debug(0, 0, "XGOMP-NAWS v%s: NThreads=%d, use_xq=%d, nested=%d, level=%d, N_VICTIMS=%d, NSTEALS=%d, NWAITS=%d, NCORES_NUMA=%d, LOCAL_PROB=%d.", 
++		XGOMP_VERSION, nthreads, thr->use_xq, nested, thr->ts.level, thr->wsd.nvictims, thr->wsd.nsteals, thr->wsd.nwaits, thr->wsd.ncores_numa, thr->wsd.nlprob);
++#endif
++	}
++#endif // XGOMP_NARP || XGOMP_NAWS
++	if(thr->use_xq && thr->td_task_q == NULL)
++	{
++		gomp_alloc_task_q(thr);
++	}
++
++  		
++#ifdef XGOMP_PLOG
++	xtask_debug(0, 0, "XPERFLOG v1 enabled.\n");
++	GOMP_ATOMIC_ST_REL(&team->xperflog_awaited, nthreads);
++	xperflog_init();
++#endif // XGOMP_PLOG
++
++#endif // GOMP_USE_XQUEUE
++
+   if (nthreads == 1)
+     return;
+ 
+   i = 1;
+ 
++
+   if (__builtin_expect (gomp_places_list != NULL, 0))
+     {
+       /* Depending on chosen proc_bind model, set subpartition
+@@ -578,7 +639,6 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
+ 		  if (affinity_thr == NULL)
+ 		    {
+ 		      unsigned int j;
+-
+ 		      if (team->prev_ts.place_partition_len > 64)
+ 			affinity_thr
+ 			  = gomp_malloc (team->prev_ts.place_partition_len
+@@ -724,7 +784,7 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
+ 					    nthreads + affinity_count);
+ 	    }
+ 	}
+-
++		// xtask_debug(0, 0, "reuse, i=%d", i);
+       if (i == nthreads)
+ 	goto do_release;
+ 
+@@ -759,6 +819,8 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
+   start_data = gomp_alloca (sizeof (struct gomp_thread_start_data)
+ 			    * (nthreads - i));
+ 
++
++
+   /* Launch new threads.  */
+   for (; i < nthreads; ++i)
+     {
+@@ -853,6 +915,9 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
+       start_data->task->taskgroup = taskgroup;
+       start_data->thread_pool = pool;
+       start_data->nested = nested;
++#ifdef GOMP_USE_XQUEUE
++	  start_data->use_xq = thr->use_xq;
++#endif
+ 
+       attr = gomp_adjust_thread_attr (attr, &thread_attr);
+       err = pthread_create (&start_data->handle, attr, gomp_thread_start,
+@@ -871,6 +936,13 @@ gomp_team_start (void (*fn) (void *), void *data, unsigned nthreads,
+   else
+     gomp_simple_barrier_wait (&pool->threads_dock);
+ 
++#ifdef GOMP_USE_XQUEUE
++/**
++ * This will go straigt to parellel end, where the team bar and simple bar is spining
++*/
++	xflag_init(thr);
++#endif
++
+   /* Decrease the barrier threshold to match the number of threads
+      that should arrive back at the end of this team.  The extra
+      threads should be exiting.  Note that we arrange for this test
+@@ -953,6 +1025,12 @@ gomp_team_end (void)
+      As #pragma omp cancel parallel might get awaited count in
+      team->barrier in a inconsistent state, we need to use a different
+      counter here.  */
++	 #ifdef GOMP_USE_XQUEUE
++	/*
++	ww: gomp_team_barrier_wait_final eventually calls gomp_barrier_wait_end. This is the scheduling point,
++	where barrier is handling tasks.
++	*/
++	 #endif
+   gomp_team_barrier_wait_final (&team->barrier);
+   if (__builtin_expect (team->team_cancelled, 0))
+     {
+@@ -971,6 +1049,11 @@ gomp_team_end (void)
+     gomp_fini_work_share (thr->ts.work_share);
+ 
+   gomp_end_task ();
++
++  // XTask: now we force a stats dump. For some internal libraries, it is now diffcult to get stats. 
++  // FIXME: this is a hack, and should be removed in the future.
++  xomp_perf_dump();
++
+   thr->ts = team->prev_ts;
+ 
+   if (__builtin_expect (thr->ts.level != 0, 0))
+diff --git a/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp b/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp
+index c335f33dda5..b3557d82a96 100644
+--- a/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp
++++ b/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp
+@@ -121,6 +121,7 @@ typedef struct user_fpregs elf_fpregset_t;
+ #include <netipx/ipx.h>
+ #include <netrom/netrom.h>
+ #include <obstack.h>
++#define HAVE_RPC_XDR_H 0
+ #if HAVE_RPC_XDR_H
+ # include <rpc/xdr.h>
+ #endif
